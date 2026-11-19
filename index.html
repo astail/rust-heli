@@ -132,7 +132,7 @@
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
       <label><input type="checkbox" id="optSound"> ローター音を出す
-        <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.6"></span></label>
+        <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.25"></span></label>
     </div>
 
     <button id="start">クリックしてスタート</button>
@@ -177,11 +177,11 @@ addEventListener('wheel', e => {
   store.set('cab', cab); syncCabUI();
   toast('距離 ' + cab.dist.toFixed(2) + ' m', 'var(--fg)', 600);
 }, { passive: true });
-// sound is off by default (not persisted as on, so a fresh visit is always silent)
-opts.sound = false; opts.vol = store.get('vol', 0.6);
-$('optVol').value = opts.vol;
-$('optSound').onchange = e => { opts.sound = e.target.checked; if (opts.sound) initAudio(); };
-$('optVol').oninput = e => { opts.vol = +e.target.value; store.set('vol', opts.vol); };
+// sound is on by default at 1/4 volume; the choice is remembered
+opts.sound = store.get('sound', true); opts.vol = store.get('vol2', 0.25);
+$('optSound').checked = opts.sound; $('optVol').value = opts.vol;
+$('optSound').onchange = e => { opts.sound = e.target.checked; store.set('sound', opts.sound); if (opts.sound) initAudio(); };
+$('optVol').oninput = e => { opts.vol = +e.target.value; store.set('vol2', opts.vol); };
 
 // ---------- sound (synthesised with Web Audio, no files) ----------
 let audio = null;
