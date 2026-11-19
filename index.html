@@ -47,6 +47,11 @@
   .opts label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .opts input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
   .opts select { background: #1e232c; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; }
+  .camfs { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; display: grid; gap: 6px; margin: 0; }
+  .camfs legend { color: var(--muted); padding: 0 6px; font-size: 13px; }
+  .camfs legend button { margin-left: 8px; background: #2a303a; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer; }
+  .cl { width: 80px; color: var(--muted); }
+  .cv { width: 64px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
   .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
   #start { margin-top: 20px; width: 100%; padding: 14px; font-size: 17px; font-weight: 700; background: var(--accent); color: #fff; border: 0; border-radius: 10px; cursor: pointer; }
   .note { color: var(--muted); font-size: 12px; margin-top: 12px; line-height: 1.5; }
@@ -116,6 +121,14 @@
           <option value="0">TPS (近め)</option><option value="1">チェイス (遠め)</option><option value="3">俯瞰</option>
         </select>
       </label>
+      <fieldset class="camfs">
+        <legend>機内視点のカメラ位置 <button type="button" id="camReset">リセット</button></legend>
+        <label><span class="cl">距離</span><input type="range" id="cDist" min="0.6" max="3.5" step="0.05"><span class="cv" id="cDistV"></span></label>
+        <label><span class="cl">高さ</span><input type="range" id="cHeight" min="1.3" max="3.2" step="0.05"><span class="cv" id="cHeightV"></span></label>
+        <label><span class="cl">左右</span><input type="range" id="cSide" min="-0.6" max="0.6" step="0.02"><span class="cv" id="cSideV"></span></label>
+        <label><span class="cl">下向き角度</span><input type="range" id="cTilt" min="-10" max="35" step="1"><span class="cv" id="cTiltV"></span></label>
+        <small style="color:var(--muted)">飛行中はマウスホイールで距離を調整できます</small>
+      </fieldset>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
       <label><input type="checkbox" id="optSound"> ローター音を出す
@@ -149,6 +162,21 @@ $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
+// in-cabin camera offsets
+const CAB_DEF = { dist: 1.45, height: 2.0, side: 0.34, tilt: 11 };
+const cab = Object.assign({}, CAB_DEF, store.get('cab', {}));
+const cabUI = [['cDist', 'dist', v => v.toFixed(2) + ' m'], ['cHeight', 'height', v => v.toFixed(2) + ' m'],
+  ['cSide', 'side', v => (v > 0 ? '右 ' : v < 0 ? '左 ' : '') + Math.abs(v).toFixed(2)], ['cTilt', 'tilt', v => v.toFixed(0) + '°']];
+function syncCabUI() { for (const [id, k, f] of cabUI) { $(id).value = cab[k]; $(id + 'V').textContent = f(cab[k]); } }
+for (const [id, k, f] of cabUI) $(id).oninput = e => { cab[k] = +e.target.value; $(id + 'V').textContent = f(cab[k]); store.set('cab', cab); };
+$('camReset').onclick = () => { Object.assign(cab, CAB_DEF); store.set('cab', cab); syncCabUI(); };
+syncCabUI();
+addEventListener('wheel', e => {
+  if (!running || camMode !== 5) return;
+  cab.dist = THREE.MathUtils.clamp(cab.dist + Math.sign(e.deltaY) * 0.15, 0.6, 3.5);
+  store.set('cab', cab); syncCabUI();
+  toast('距離 ' + cab.dist.toFixed(2) + ' m', 'var(--fg)', 600);
+}, { passive: true });
 // sound is off by default (not persisted as on, so a fresh visit is always silent)
 opts.sound = false; opts.vol = store.get('vol', 0.6);
 $('optVol').value = opts.vol;
@@ -738,9 +766,9 @@ function updateCamera(dt) {
   cabin.visible = inCabin; hull.visible = canopy.visible = mast.visible = !inCabin;
   if (inCabin) {
     rotor.children.forEach(b => { b.material.transparent = true; b.material.opacity = 0.15; });
-    camera.position.copy(new THREE.Vector3(0.34, 2.0, 1.45).applyQuaternion(state.q).add(state.pos));
+    camera.position.copy(new THREE.Vector3(cab.side, cab.height, cab.dist).applyQuaternion(state.q).add(state.pos));
     // head lags the airframe slightly
-    const tq = state.q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.2));
+    const tq = state.q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -cab.tilt / 57.3));
     camQ.slerp(tq, 1 - Math.exp(-dt * 9));
     camera.quaternion.copy(camQ);
     camPos.copy(camera.position);
