@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rust Heli Trainer</title>
+<meta name="description" content="RustのMinicopter操作をブラウザで練習できる非公式フライトトレーナー">
+<style>
+  :root {
+    --bg: #0e1116; --panel: rgba(14,17,22,.78); --fg: #e8e6e1; --muted: #9aa3ad;
+    --accent: #e0662c; --good: #5fbf6a; --bad: #e05050; --line: rgba(255,255,255,.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  canvas#gl { display: block; width: 100vw; height: 100vh; }
+  .hud { position: fixed; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #stats { left: 16px; bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 210px; }
+  #stats .row { display: flex; justify-content: space-between; gap: 18px; font-size: 14px; line-height: 1.7; }
+  #stats .row span:first-child { color: var(--muted); }
+  #thrbar { height: 8px; background: rgba(255,255,255,.1); border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  #thrfill { height: 100%; width: 50%; background: var(--accent); }
+  #att { right: 16px; bottom: 16px; width: 170px; height: 170px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); }
+  #mission { left: 50%; top: 14px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 16px; font-size: 15px; text-align: center; max-width: calc(100vw - 32px); }
+  #mission b { color: var(--accent); }
+  #toast { left: 50%; top: 40%; transform: translate(-50%,-50%); font-size: 34px; font-weight: 700; text-shadow: 0 2px 10px #000; opacity: 0; transition: opacity .3s; text-align: center; }
+  #keys { right: 16px; top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; }
+  .k { border: 1px solid var(--line); border-radius: 5px; text-align: center; padding: 4px 0; color: var(--muted); }
+  .k.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8,10,14,.72); padding: 16px; overflow-y: auto; }
+  #menu .card { background: #161a21; border: 1px solid var(--line); border-radius: 14px; padding: 24px; width: 100%; max-width: 640px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+  h2 { font-size: 15px; margin: 18px 0 8px; color: var(--muted); font-weight: 600; }
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .mode { background: #1e232c; border: 1px solid var(--line); color: var(--fg); border-radius: 10px; padding: 12px; text-align: left; cursor: pointer; font: inherit; }
+  .mode:hover, .mode.sel { border-color: var(--accent); }
+  .mode b { display: block; margin-bottom: 4px; }
+  .mode small { color: var(--muted); line-height: 1.4; display: block; }
+  table.ctl { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.ctl td { padding: 5px 4px; border-bottom: 1px solid var(--line); }
+  table.ctl td:first-child { width: 42%; }
+  kbd { background: #2a303a; border: 1px solid #3a414d; border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 12px; font-family: inherit; }
+  .opts { display: grid; gap: 10px; font-size: 14px; }
+  .opts label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .opts input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  #start { margin-top: 20px; width: 100%; padding: 14px; font-size: 17px; font-weight: 700; background: var(--accent); color: #fff; border: 0; border-radius: 10px; cursor: pointer; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+  .best { color: var(--good); font-size: 12px; }
+  @media (max-width: 640px) { #att { width: 110px; height: 110px; } #keys { display: none; } #stats { min-width: 170px; } }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div class="hud" id="mission"></div>
+<div class="hud" id="toast"></div>
+<div class="hud" id="keys">
+  <div></div><div class="k" id="kW">W</div><div></div>
+  <div class="k" id="kA">A</div><div class="k" id="kS">S</div><div class="k" id="kD">D</div>
+</div>
+<div class="hud" id="stats">
+  <div class="row"><span>高度 (AGL)</span><span id="sAlt">0 m</span></div>
+  <div class="row"><span>速度</span><span id="sSpd">0 km/h</span></div>
+  <div class="row"><span>昇降率</span><span id="sVs">0.0 m/s</span></div>
+  <div class="row"><span>ピッチ / ロール</span><span id="sAtt">0° / 0°</span></div>
+  <div class="row"><span>スロットル</span><span id="sThr">0%</span></div>
+  <div id="thrbar"><div id="thrfill"></div></div>
+</div>
+<canvas class="hud" id="att" width="340" height="340"></canvas>
+
+<div id="menu">
+  <div class="card">
+    <h1>Rust <span>Heli</span> Trainer</h1>
+    <p class="sub">Rust の Minicopter 風の操縦をブラウザで練習するための非公式シミュレーター</p>
+
+    <h2>モード</h2>
+    <div class="modes">
+      <button class="mode sel" data-mode="free"><b>フリーフライト</b><small>自由に飛んで操作に慣れる</small></button>
+      <button class="mode" data-mode="rings"><b>リングコース</b><small>10個のリングをくぐってタイムアタック</small><span class="best" id="bestRings"></span></button>
+      <button class="mode" data-mode="landing"><b>着陸チャレンジ</b><small>ヘリパッドや屋上に5回着陸</small><span class="best" id="bestLanding"></span></button>
+      <button class="mode" data-mode="hover"><b>ホバリング</b><small>エリア内で高度を保って20秒静止</small><span class="best" id="bestHover"></span></button>
+    </div>
+
+    <h2>操作 (Rust のデフォルト準拠)</h2>
+    <table class="ctl">
+      <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
+      <tr><td><kbd>S</kbd></td><td>スロットル下降 (降下)</td></tr>
+      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す)</td></tr>
+      <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
+      <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
+      <tr><td><kbd>C</kbd></td><td>カメラ切替 (三人称 / コックピット)</td></tr>
+      <tr><td><kbd>R</kbd></td><td>リスポーン</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>一時停止 / メニュー</td></tr>
+    </table>
+
+    <h2>設定</h2>
+    <div class="opts">
+      <label>マウス感度 <input type="range" id="optSens" min="0.2" max="3" step="0.1" value="1"><span id="optSensV">1.0</span></label>
+      <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
+      <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
+    </div>
+
+    <button id="start">クリックしてスタート</button>
+    <p class="note">PC + マウス推奨。開始するとマウスがロックされます (Esc で解除)。<br>
+    Facepunch Studios とは無関係のファンメイド練習ツールです。挙動は本家を近似したもので完全一致ではありません。</p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+
+// ---------- settings ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('rhtr_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('rhtr_' + k, JSON.stringify(v)); } catch {} }
+};
+const opts = { sens: store.get('sens', 1), invert: store.get('invert', false), assist: store.get('assist', false) };
+$('optSens').value = opts.sens; $('optSensV').textContent = (+opts.sens).toFixed(1);
+$('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
+$('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(1); store.set('sens', opts.sens); };
+$('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
+$('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
+
+let mode = 'free';
+document.querySelectorAll('.mode').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.mode').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel'); mode = b.dataset.mode;
+});
+function fmtTime(t) { return t.toFixed(2) + 's'; }
+function refreshBest() {
+  const r = store.get('best_rings', null), l = store.get('best_landing', null), h = store.get('best_hover', null);
+  $('bestRings').textContent = r ? 'ベスト ' + fmtTime(r) : '';
+  $('bestLanding').textContent = l ? 'ベスト ' + fmtTime(l) : '';
+  $('bestHover').textContent = h ? 'ベスト ' + fmtTime(h) : '';
+}
+refreshBest();
+
+// ---------- three setup ----------
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa9c2d6);
+scene.fog = new THREE.Fog(0xa9c2d6, 150, 900);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 2000);
+function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+scene.add(new THREE.HemisphereLight(0xdfeaff, 0x5a5040, 0.75));
+const sun = new THREE.DirectionalLight(0xfff2dd, 0.9);
+sun.position.set(120, 200, 80); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -80, right: 80, top: 80, bottom: -80, near: 1, far: 500 });
+scene.add(sun); scene.add(sun.target);
+
+// ---------- terrain ----------
+const WORLD = 1600;
+function terrainH(x, z) {
+  const d = Math.hypot(x, z);
+  const flat = Math.min(1, Math.max(0, (d - 60) / 140));
+  let h = 14 * Math.sin(x * 0.006 + 0.5) * Math.cos(z * 0.0075)
+        + 6 * Math.sin(x * 0.021 + 1.3) * Math.sin(z * 0.018 + 0.7)
+        + 2 * Math.sin(x * 0.07) * Math.cos(z * 0.06);
+  h += 40 * Math.max(0, (d - 450) / 350) ** 2; // mountains at edge
+  return h * flat;
+}
+{
+  const geo = new THREE.PlaneGeometry(WORLD, WORLD, 220, 220);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position, colors = [];
+  const cGrass = new THREE.Color(0x6f8a4a), cDry = new THREE.Color(0x9c8f5e), cRock = new THREE.Color(0x857d74);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i), y = terrainH(x, z);
+    pos.setY(i, y);
+    const c = cGrass.clone().lerp(cDry, Math.min(1, Math.max(0, (y + 5) / 25)));
+    if (y > 35) c.lerp(cRock, Math.min(1, (y - 35) / 30));
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+}
+
+// rng
+let seed = 1337; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+// ---------- solids (buildings / pads) ----------
+// each: {x,z,hw,hd,top,base}
+const solids = [];
+function addBox(x, z, w, d, h, color, opts2 = {}) {
+  const base = opts2.base !== undefined ? opts2.base : Math.min(terrainH(x - w/2, z - d/2), terrainH(x + w/2, z + d/2), terrainH(x, z)) - 1;
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
+  m.position.set(x, base + h / 2, z); m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+  const s = { x, z, hw: w / 2, hd: d / 2, top: base + h, base, mesh: m };
+  solids.push(s); return s;
+}
+function padMarking(x, y, z, r, color = 0xffd23f) {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.78, r * 0.9, 40), new THREE.MeshBasicMaterial({ color }));
+  ring.rotation.x = -Math.PI / 2; g.add(ring);
+  const bar = (w, d, px) => { const b = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ color })); b.rotation.x = -Math.PI / 2; b.position.x = px; g.add(b); };
+  bar(r * 0.12, r * 0.9, -r * 0.3); bar(r * 0.12, r * 0.9, r * 0.3); bar(r * 0.6, r * 0.12, 0);
+  g.position.set(x, y + 0.03, z); scene.add(g); return g;
+}
+// home pad
+const HOME = addBox(0, 0, 14, 14, 1.2, 0x55595f, { base: -0.8 });
+padMarking(0, HOME.top, 0, 6);
+
+// town of buildings
+const pads = [];
+for (let i = 0; i < 40; i++) {
+  const ang = rnd() * Math.PI * 2, dist = 90 + rnd() * 380;
+  const x = Math.cos(ang) * dist, z = Math.sin(ang) * dist;
+  if (solids.some(s => Math.abs(s.x - x) < s.hw + 16 && Math.abs(s.z - z) < s.hd + 16)) continue;
+  const w = 10 + rnd() * 14, d = 10 + rnd() * 14, h = 6 + rnd() * 34;
+  const gray = 0x6a + Math.floor(rnd() * 0x30);
+  addBox(x, z, w, d, h, (gray << 16) | (gray << 8) | (gray - 8));
+}
+// landing targets: designated pads (ground pads + rooftops)
+const landingDefs = [
+  { x: 160, z: -60, w: 12, h: 1.2 }, { x: -140, z: -180, w: 10, h: 22 }, { x: 260, z: 190, w: 12, h: 1.2 },
+  { x: -260, z: 110, w: 9, h: 30 }, { x: 40, z: 280, w: 10, h: 14 }, { x: -60, z: -320, w: 12, h: 1.2 },
+  { x: 330, z: -230, w: 9, h: 18 }, { x: -340, z: -60, w: 12, h: 1.2 }
+];
+for (const L of landingDefs) {
+  // remove overlapping buildings
+  for (let i = solids.length - 1; i >= 0; i--) {
+    const s = solids[i];
+    if (s !== HOME && Math.abs(s.x - L.x) < s.hw + L.w && Math.abs(s.z - L.z) < s.hd + L.w) { scene.remove(s.mesh); solids.splice(i, 1); }
+  }
+  const s = addBox(L.x, L.z, L.w, L.w, L.h + (L.h < 2 ? 0 : 0), L.h < 2 ? 0x55595f : 0x7a6f66, L.h < 2 ? { base: terrainH(L.x, L.z) - 0.6 } : {});
+  const mark = padMarking(L.x, s.top, L.z, L.w * 0.42, 0xffffff);
+  pads.push({ s, mark });
+}
+
+// trees
+{
+  const trunkG = new THREE.CylinderGeometry(0.3, 0.4, 3, 6), leafG = new THREE.ConeGeometry(2.4, 7, 7);
+  const trunkM = new THREE.MeshLambertMaterial({ color: 0x5b4330 }), leafM = new THREE.MeshLambertMaterial({ color: 0x3f5f32 });
+  const N = 900, trunks = new THREE.InstancedMesh(trunkG, trunkM, N), leaves = new THREE.InstancedMesh(leafG, leafM, N);
+  const m = new THREE.Matrix4(); let n = 0;
+  for (let i = 0; i < N * 3 && n < N; i++) {
+    const x = (rnd() - 0.5) * WORLD * 0.9, z = (rnd() - 0.5) * WORLD * 0.9;
+    if (Math.hypot(x, z) < 50) continue;
+    if (solids.some(s => Math.abs(s.x - x) < s.hw + 4 && Math.abs(s.z - z) < s.hd + 4)) continue;
+    const y = terrainH(x, z), sc = 0.8 + rnd() * 0.8;
+    m.makeScale(sc, sc, sc).setPosition(x, y + 1.5 * sc, z); trunks.setMatrixAt(n, m);
+    m.makeScale(sc, sc, sc).setPosition(x, y + 6 * sc, z); leaves.setMatrixAt(n, m);
+    n++;
+  }
+  trunks.count = leaves.count = n; leaves.castShadow = true;
+  scene.add(trunks, leaves);
+}
+
+// ---------- helicopter model ----------
+const heli = new THREE.Group();
+{
+  const body = new THREE.MeshLambertMaterial({ color: 0x5c6b4e }), dark = new THREE.MeshLambertMaterial({ color: 0x2b2f33 });
+  const glass = new THREE.MeshLambertMaterial({ color: 0x9fc4d8, transparent: true, opacity: 0.55 });
+  const add = (g, mat, x, y, z) => { const o = new THREE.Mesh(g, mat); o.position.set(x, y, z); o.castShadow = true; heli.add(o); return o; };
+  add(new THREE.BoxGeometry(1.4, 1.1, 2.2), body, 0, 0.95, 0);
+  add(new THREE.SphereGeometry(0.75, 12, 10), glass, 0, 1.05, -1.05).scale.set(0.95, 0.85, 0.8);
+  add(new THREE.BoxGeometry(0.25, 0.25, 3.2), body, 0, 1.15, 2.6);
+  add(new THREE.BoxGeometry(0.08, 0.8, 0.5), body, 0, 1.45, 4.1);
+  add(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 6), dark, 0, 1.75, 0);
+  for (const sx of [-0.75, 0.75]) add(new THREE.BoxGeometry(0.08, 0.08, 2.8), dark, sx, 0.08, 0);
+  for (const sz of [-0.7, 0.7]) for (const sx of [-0.55, 0.55]) add(new THREE.BoxGeometry(0.06, 0.45, 0.06), dark, sx, 0.3, sz);
+}
+const rotor = new THREE.Group(); rotor.position.set(0, 2.05, 0); heli.add(rotor);
+for (let i = 0; i < 2; i++) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.04, 7.6), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+  b.rotation.y = i * Math.PI / 2; rotor.add(b);
+}
+const tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.1, 0.12), new THREE.MeshLambertMaterial({ color: 0x222222 }));
+tailRotor.position.set(0.12, 1.45, 4.2); heli.add(tailRotor);
+scene.add(heli);
+
+// ---------- rings ----------
+const ringGroup = new THREE.Group(); scene.add(ringGroup);
+const ringDefs = [
+  [0, 18, -90], [70, 26, -170], [170, 30, -150], [230, 22, -60], [210, 40, 60],
+  [110, 18, 140], [0, 14, 190], [-120, 34, 120], [-170, 20, 0], [-80, 12, -60]
+];
+let rings = [];
+function buildRings() {
+  ringGroup.clear(); rings = [];
+  ringDefs.forEach((p, i) => {
+    const pos = new THREE.Vector3(p[0], p[1] + terrainH(p[0], p[2]), p[2]);
+    const next = ringDefs[(i + 1) % ringDefs.length], prev = ringDefs[(i - 1 + ringDefs.length) % ringDefs.length];
+    const dir = new THREE.Vector3(next[0] - prev[0], 0, next[2] - prev[2]).normalize();
+    const mesh = new THREE.Mesh(new THREE.TorusGeometry(7, 0.45, 8, 32), new THREE.MeshBasicMaterial({ color: 0x777777 }));
+    mesh.position.copy(pos); mesh.lookAt(pos.clone().add(dir));
+    ringGroup.add(mesh);
+    rings.push({ pos, normal: dir, mesh, r: 7 });
+  });
+}
+
+// ---------- hover zone ----------
+const hoverZone = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 8, 32, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0x4fc3ff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+hoverZone.visible = false; scene.add(hoverZone);
+
+// target marker (arrow above objective)
+const marker = new THREE.Mesh(new THREE.ConeGeometry(1.6, 3.5, 4), new THREE.MeshBasicMaterial({ color: 0xff7a2f }));
+marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
+
+// ---------- input ----------
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyC') camMode = (camMode + 1) % 2;
+  if (e.code === 'KeyR' && running) respawn();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+let mouseDX = 0, mouseDY = 0;
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; }
+});
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== canvas && running) pause();
+});
+canvas.addEventListener('click', () => { if (running && document.pointerLockElement !== canvas) canvas.requestPointerLock(); });
+
+// ---------- physics state ----------
+const G = 9.81;
+const state = {
+  pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(),
+  angVel: new THREE.Vector3(), throttle: 0, rotorSpin: 0, crashed: false, grounded: true
+};
+let running = false, camMode = 0, crashTimer = 0;
+const spawn = { pos: new THREE.Vector3(0, HOME.top, 4), yaw: 0 };
+
+function respawn() {
+  state.pos.copy(spawn.pos); state.vel.set(0, 0, 0); state.angVel.set(0, 0, 0);
+  state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0));
+  state.throttle = 0; state.crashed = false; state.grounded = true; crashTimer = 0;
+  heli.visible = true;
+  startMode();
+}
+
+function groundAt(x, z, footprint = 1.2) {
+  let h = terrainH(x, z), solid = null;
+  for (const s of solids) {
+    if (Math.abs(x - s.x) < s.hw + footprint && Math.abs(z - s.z) < s.hd + footprint && s.top > h) { h = s.top; solid = s; }
+  }
+  return { h, solid };
+}
+
+const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+function attitude() {
+  // pitch / roll relative to horizon, in degrees
+  const fwd = _v.set(0, 0, -1).applyQuaternion(state.q);
+  const pitch = Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1));
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(state.q);
+  const roll = Math.asin(THREE.MathUtils.clamp(-right.y, -1, 1));
+  return { pitch: pitch * 57.3, roll: roll * 57.3 };
+}
+function upY() { return _v.set(0, 1, 0).applyQuaternion(state.q).y; }
+
+function crash(reason) {
+  if (state.crashed) return;
+  state.crashed = true; crashTimer = 2.2;
+  toast('CRASH! ' + reason, 'var(--bad)');
+  explode(state.pos);
+}
+
+// simple debris effect
+const debris = [];
+function explode(p) {
+  for (let i = 0; i < 24; i++) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshBasicMaterial({ color: i % 3 ? 0x333333 : 0xff8a2a }));
+    m.position.copy(p).add(new THREE.Vector3(0, 1, 0));
+    scene.add(m);
+    debris.push({ m, v: new THREE.Vector3((Math.random() - .5) * 14, Math.random() * 12, (Math.random() - .5) * 14), t: 2 });
+  }
+  heli.visible = false;
+}
+
+function stepPhysics(dt) {
+  if (state.crashed) { state.vel.set(0, 0, 0); return; }
+  // --- throttle (W/S) like Rust: hold W climb, S descend, none = slow sink ---
+  const up = keys.KeyW ? 1 : 0, down = keys.KeyS ? 1 : 0;
+  let target = up && !down ? 1 : down && !up ? 0 : 0.5;
+  if (state.grounded && !up) target = down ? 0 : 0.0;
+  state.throttle += (target - state.throttle) * Math.min(1, dt * 3.5);
+  state.rotorSpin += ((state.grounded && state.throttle < 0.05 ? 0.25 : 1) - state.rotorSpin) * Math.min(1, dt * 1.5);
+
+  // --- angular input ---
+  const sens = 0.0035 * opts.sens;
+  const inv = opts.invert ? -1 : 1;
+  // mouse forward (negative dy) = nose down
+  const pitchIn = mouseDY * sens * inv, rollIn = -mouseDX * sens;
+  mouseDX = mouseDY = 0;
+  const yawIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+
+  if (!state.grounded) {
+    state.angVel.x += pitchIn / Math.max(dt, 1e-3) * 0.06; // impulse -> rate
+    state.angVel.z += rollIn / Math.max(dt, 1e-3) * 0.06;
+  }
+  state.angVel.x = THREE.MathUtils.clamp(state.angVel.x, -3, 3);
+  state.angVel.z = THREE.MathUtils.clamp(state.angVel.z, -3, 3);
+  const yawTarget = yawIn * 1.6 * (state.grounded ? 0.0 : 1);
+  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 4);
+  // damping (Rust's copter holds attitude after mouse input stops)
+  const damp = Math.exp(-dt * 6);
+  state.angVel.x *= damp; state.angVel.z *= damp;
+
+  // auto-level assist
+  if (opts.assist && !state.grounded) {
+    const a = attitude();
+    if (Math.abs(pitchIn) < 1e-4) state.angVel.x -= (a.pitch / 57.3) * dt * 2.2;
+    if (Math.abs(rollIn) < 1e-4) state.angVel.z += (a.roll / 57.3) * dt * 2.2;
+  }
+
+  // apply local rotation (pitch about x, roll about z), yaw about world up
+  _q.setFromEuler(_e.set(state.angVel.x * dt, 0, state.angVel.z * dt));
+  state.q.multiply(_q);
+  _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), state.angVel.y * dt);
+  state.q.premultiply(_q).normalize();
+
+  // --- forces ---
+  // thrust relative to hover: 0 -> 0.55g, 0.5 -> ~0.95g (slow sink), 1 -> 1.75g
+  const thrustG = state.throttle < 0.5 ? 0.55 + state.throttle * 0.8 : 0.95 + (state.throttle - 0.5) * 1.6;
+  const thrust = thrustG * G * state.rotorSpin;
+  const thrustDir = new THREE.Vector3(0, 1, 0).applyQuaternion(state.q);
+  const acc = thrustDir.multiplyScalar(thrust);
+  acc.y -= G;
+  // drag
+  const hv = new THREE.Vector3(state.vel.x, 0, state.vel.z);
+  acc.addScaledVector(hv, -0.08 - 0.0025 * hv.length());
+  acc.y -= state.vel.y * 0.35;
+  // ground effect
+  if (state.grounded && acc.y < 0) acc.y = 0;
+  state.vel.addScaledVector(acc, dt);
+  state.pos.addScaledVector(state.vel, dt);
+
+  // --- collisions ---
+  const gnd = groundAt(state.pos.x, state.pos.z, 1.0);
+  const tiltUp = upY();
+  // building side hits (fuselage enters a solid below its top)
+  for (const s of solids) {
+    if (Math.abs(state.pos.x - s.x) < s.hw && Math.abs(state.pos.z - s.z) < s.hd && state.pos.y < s.top - 0.6 && state.pos.y > s.base) {
+      crash('建物に衝突'); return;
+    }
+  }
+  // rotor strike with buildings nearby
+  for (const s of solids) {
+    if (Math.abs(state.pos.x - s.x) < s.hw + 3.4 && Math.abs(state.pos.z - s.z) < s.hd + 3.4 &&
+        state.pos.y + 2 > s.base && state.pos.y + 1.6 < s.top &&
+        !(Math.abs(state.pos.x - s.x) < s.hw + 1.0 && Math.abs(state.pos.z - s.z) < s.hd + 1.0)) {
+      crash('ローターが接触'); return;
+    }
+  }
+  if (state.pos.y <= gnd.h) {
+    const impact = -state.vel.y, hs = hv.length();
+    if (!state.grounded && (impact > 7 || hs > 12 || tiltUp < 0.8)) { crash(impact > 7 ? '強く接地しすぎ' : tiltUp < 0.8 ? '傾いたまま接地' : '速度超過で接地'); return; }
+    state.pos.y = gnd.h;
+    if (state.vel.y < 0) state.vel.y = 0;
+    state.vel.x *= Math.exp(-dt * 4); state.vel.z *= Math.exp(-dt * 4);
+    if (!state.grounded) onTouchdown(gnd, impact, hs);
+    state.grounded = true;
+    // settle level on ground
+    _e.setFromQuaternion(state.q, 'YXZ');
+    _e.x *= Math.exp(-dt * 8); _e.z *= Math.exp(-dt * 8);
+    state.q.setFromEuler(_e);
+    state.angVel.x = state.angVel.z = 0;
+  } else if (state.pos.y > gnd.h + 0.15) {
+    state.grounded = false;
+  }
+  if (tiltUp < -0.2 && state.pos.y - gnd.h < 3) { crash('横転'); return; }
+  // world bounds
+  const lim = WORLD / 2 - 30;
+  if (Math.abs(state.pos.x) > lim || Math.abs(state.pos.z) > lim) { state.pos.x = THREE.MathUtils.clamp(state.pos.x, -lim, lim); state.pos.z = THREE.MathUtils.clamp(state.pos.z, -lim, lim); state.vel.multiplyScalar(0.3); }
+  if (state.pos.y > 400) { state.pos.y = 400; state.vel.y = Math.min(0, state.vel.y); }
+}
+
+// ---------- modes ----------
+const M = { t: 0, idx: 0, done: false, hoverT: 0, lastPos: new THREE.Vector3() };
+function startMode() {
+  M.t = 0; M.idx = 0; M.done = false; M.hoverT = 0; M.lastPos.copy(state.pos);
+  ringGroup.visible = mode === 'rings';
+  hoverZone.visible = mode === 'hover';
+  pads.forEach(p => p.mark.children.forEach(c => c.material.color.set(0xffffff)));
+  if (mode === 'rings') { buildRings(); highlightRing(); }
+  if (mode === 'hover') {
+    const h = terrainH(0, -45);
+    hoverZone.position.set(0, h + 10, -45); hoverZone.material.color.set(0x4fc3ff);
+  }
+  if (mode === 'landing') highlightPad();
+  marker.visible = mode !== 'free';
+}
+function highlightRing() {
+  rings.forEach((r, i) => r.mesh.material.color.set(i < M.idx ? 0x44aa55 : i === M.idx ? 0xff7a2f : i === M.idx + 1 ? 0xffd27a : 0x888888));
+}
+const landingOrder = [0, 1, 4, 3, 5];
+function highlightPad() {
+  pads.forEach((p, i) => p.mark.children.forEach(c => c.material.color.set(i === landingOrder[M.idx] ? 0xff7a2f : 0xffffff)));
+}
+function onTouchdown(gnd, impact, hs) {
+  if (mode !== 'landing' || M.done) return;
+  const target = pads[landingOrder[M.idx]];
+  if (gnd.solid === target.s) {
+    const soft = impact < 2.5 ? 'ソフトランディング!' : '着陸OK';
+    M.idx++;
+    if (M.idx >= landingOrder.length) finish('best_landing', '全着陸完了');
+    else { toast(soft + ` (${M.idx}/${landingOrder.length})`, 'var(--good)'); highlightPad(); }
+  }
+}
+function finish(key, label) {
+  M.done = true;
+  const prev = store.get(key, null);
+  const isBest = !prev || M.t < prev;
+  if (isBest) store.set(key, M.t);
+  toast(`${label}<br>${fmtTime(M.t)}${isBest ? ' — ベスト更新!' : ` (ベスト ${fmtTime(prev)})`}`, 'var(--good)', 4000);
+  refreshBest();
+  marker.visible = false;
+}
+function updateMode(dt) {
+  if (state.crashed || M.done) return;
+  const started = !state.grounded || M.t > 0;
+  if (mode !== 'free' && started && !(mode === 'hover' && M.t === 0 && state.grounded)) M.t += dt;
+  let msg = '';
+  if (mode === 'free') msg = '<b>フリーフライト</b> — 好きに飛んでみよう';
+  if (mode === 'rings') {
+    const r = rings[M.idx];
+    // crossing check: segment lastPos->pos crosses ring plane within radius
+    const d0 = _v.copy(M.lastPos).sub(r.pos).dot(r.normal), d1 = new THREE.Vector3().copy(state.pos).sub(r.pos).dot(r.normal);
+    const center = state.pos.clone().add(new THREE.Vector3(0, 1, 0));
+    if (Math.sign(d0) !== Math.sign(d1) && center.distanceTo(r.pos) < r.r) {
+      M.idx++;
+      if (M.idx >= rings.length) { finish('best_rings', 'コース完走'); return; }
+      highlightRing();
+    }
+    marker.position.copy(rings[M.idx].pos).add(new THREE.Vector3(0, 11, 0));
+    msg = `<b>リングコース</b> ${M.idx}/${rings.length} — ${fmtTime(M.t)}`;
+  }
+  if (mode === 'landing') {
+    const p = pads[landingOrder[M.idx]].s;
+    marker.position.set(p.x, p.top + 9, p.z);
+    const dist = Math.hypot(state.pos.x - p.x, state.pos.z - p.z);
+    msg = `<b>着陸チャレンジ</b> ${M.idx}/${landingOrder.length} — オレンジのパッドへ (${dist.toFixed(0)} m) — ${fmtTime(M.t)}`;
+  }
+  if (mode === 'hover') {
+    const z = hoverZone.position;
+    const inside = Math.hypot(state.pos.x - z.x, state.pos.z - z.z) < 6 && state.pos.y > z.y - 4 && state.pos.y < z.y + 4 && !state.grounded;
+    const still = state.vel.length() < 3;
+    if (inside && still) M.hoverT += dt;
+    hoverZone.material.color.set(inside ? (still ? 0x5fbf6a : 0xffc04f) : 0x4fc3ff);
+    marker.position.set(z.x, z.y + 9, z.z);
+    msg = `<b>ホバリング</b> 青い円柱の中で静止 (速度3m/s未満) — ${M.hoverT.toFixed(1)} / 20.0s — 経過 ${fmtTime(M.t)}`;
+    if (M.hoverT >= 20) { finish('best_hover', 'ホバリング達成'); return; }
+  }
+  M.lastPos.copy(state.pos);
+  $('mission').innerHTML = msg;
+}
+
+let toastTimer = 0;
+function toast(html, color = 'var(--fg)', ms = 1800) {
+  const t = $('toast'); t.innerHTML = html; t.style.color = color; t.style.opacity = 1;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.opacity = 0, ms);
+}
+
+// ---------- camera ----------
+const camPos = new THREE.Vector3(0, 8, 14);
+function updateCamera(dt) {
+  if (camMode === 1 && !state.crashed) {
+    const p = new THREE.Vector3(0, 1.35, -0.6).applyQuaternion(state.q).add(state.pos);
+    camera.position.copy(p); camera.quaternion.copy(state.q);
+    heli.visible = false;
+    return;
+  }
+  if (!state.crashed) heli.visible = true;
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
+  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
+  const desired = state.pos.clone().addScaledVector(fwd, -11).add(new THREE.Vector3(0, 4.2, 0));
+  const gh = groundAt(desired.x, desired.z, 0).h + 1;
+  if (desired.y < gh) desired.y = gh;
+  camPos.lerp(desired, 1 - Math.exp(-dt * 6));
+  camera.position.copy(camPos);
+  camera.lookAt(state.pos.x, state.pos.y + 1.8, state.pos.z);
+}
+
+// ---------- HUD ----------
+const att = $('att'), actx = att.getContext('2d');
+function drawAttitude(a) {
+  const W = att.width, R = W / 2;
+  actx.clearRect(0, 0, W, W);
+  actx.save(); actx.beginPath(); actx.arc(R, R, R - 4, 0, Math.PI * 2); actx.clip();
+  actx.translate(R, R); actx.rotate(-a.roll / 57.3);
+  const off = a.pitch * 3;
+  actx.fillStyle = '#3c7fb8'; actx.fillRect(-W, -W * 2 + off, W * 2, W * 2);
+  actx.fillStyle = '#7a5a36'; actx.fillRect(-W, off, W * 2, W * 2);
+  actx.strokeStyle = '#fff'; actx.lineWidth = 3; actx.beginPath(); actx.moveTo(-W, off); actx.lineTo(W, off); actx.stroke();
+  actx.lineWidth = 2; actx.font = '20px system-ui'; actx.fillStyle = '#fff'; actx.textAlign = 'left';
+  for (let p = -60; p <= 60; p += 10) {
+    if (!p) continue;
+    const y = off - p * 3, w = p % 20 ? 30 : 55;
+    actx.beginPath(); actx.moveTo(-w, y); actx.lineTo(w, y); actx.stroke();
+    if (!(p % 20)) actx.fillText(Math.abs(p), w + 6, y + 7);
+  }
+  actx.restore();
+  actx.strokeStyle = '#ffb020'; actx.lineWidth = 6;
+  actx.beginPath(); actx.moveTo(R - 70, R); actx.lineTo(R - 25, R); actx.lineTo(R - 12, R + 14); actx.moveTo(R + 70, R); actx.lineTo(R + 25, R); actx.lineTo(R + 12, R + 14); actx.stroke();
+  actx.beginPath(); actx.arc(R, R, 5, 0, Math.PI * 2); actx.fillStyle = '#ffb020'; actx.fill();
+}
+function updateHUD() {
+  const a = attitude();
+  const agl = state.pos.y - groundAt(state.pos.x, state.pos.z, 1).h;
+  $('sAlt').textContent = agl.toFixed(1) + ' m';
+  $('sSpd').textContent = (state.vel.length() * 3.6).toFixed(0) + ' km/h';
+  $('sVs').textContent = (state.vel.y >= 0 ? '+' : '') + state.vel.y.toFixed(1) + ' m/s';
+  $('sAtt').textContent = `${a.pitch.toFixed(0)}° / ${a.roll.toFixed(0)}°`;
+  $('sThr').textContent = Math.round(state.throttle * 100) + '%';
+  $('thrfill').style.width = (state.throttle * 100) + '%';
+  for (const k of ['W', 'A', 'S', 'D']) $('k' + k).classList.toggle('on', !!keys['Key' + k]);
+  drawAttitude(a);
+}
+
+// ---------- menu / loop ----------
+function pause() {
+  running = false; $('menu').style.display = 'flex'; $('start').textContent = '再開 (クリック)';
+}
+let lastMode = null;
+$('start').onclick = () => {
+  $('menu').style.display = 'none';
+  running = true;
+  if (lastMode !== mode) { lastMode = mode; respawn(); }
+  canvas.requestPointerLock();
+};
+document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => { $('start').textContent = 'クリックしてスタート'; }));
+
+respawn();
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (running) {
+    const sub = 4;
+    for (let i = 0; i < sub; i++) stepPhysics(dt / sub);
+    updateMode(dt);
+    if (state.crashed) { crashTimer -= dt; if (crashTimer <= 0) respawn(); }
+  } else { mouseDX = mouseDY = 0; }
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const d = debris[i]; d.v.y -= G * dt; d.m.position.addScaledVector(d.v, dt); d.m.rotation.x += dt * 5; d.t -= dt;
+    if (d.t <= 0) { scene.remove(d.m); debris.splice(i, 1); }
+  }
+  heli.position.copy(state.pos); heli.quaternion.copy(state.q);
+  rotor.rotation.y += dt * 40 * state.rotorSpin * (0.3 + state.throttle);
+  tailRotor.rotation.x += dt * 60 * state.rotorSpin;
+  marker.rotation.y += dt * 2;
+  sun.position.set(state.pos.x + 120, state.pos.y + 200, state.pos.z + 80); sun.target.position.copy(state.pos);
+  updateCamera(dt);
+  updateHUD();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
