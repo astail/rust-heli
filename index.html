@@ -118,6 +118,8 @@
       </label>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
+      <label><input type="checkbox" id="optSound"> ローター音を出す
+        <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.6"></span></label>
     </div>
 
     <button id="start">クリックしてスタート</button>
@@ -147,6 +149,67 @@ $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
+// sound is off by default (not persisted as on, so a fresh visit is always silent)
+opts.sound = false; opts.vol = store.get('vol', 0.6);
+$('optVol').value = opts.vol;
+$('optSound').onchange = e => { opts.sound = e.target.checked; if (opts.sound) initAudio(); };
+$('optVol').oninput = e => { opts.vol = +e.target.value; store.set('vol', opts.vol); };
+
+// ---------- sound (synthesised with Web Audio, no files) ----------
+let audio = null;
+function initAudio() {
+  if (audio) { audio.ctx.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const ctx = new AC();
+  const master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+  // shared white-noise buffer
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const noise = () => { const n = ctx.createBufferSource(); n.buffer = buf; n.loop = true; n.start(); return n; };
+  // blade-pass pulse train ("whop whop")
+  const lfo = ctx.createOscillator();
+  lfo.setPeriodicWave(ctx.createPeriodicWave(new Float32Array([0, 1, .85, .65, .45, .3, .18]), new Float32Array(7)));
+  lfo.frequency.value = 4; lfo.start();
+  // rotor chop: noise -> lowpass -> gain modulated by lfo
+  const chopLP = ctx.createBiquadFilter(); chopLP.type = 'lowpass'; chopLP.frequency.value = 450; chopLP.Q.value = 0.7;
+  const chop = ctx.createGain(); chop.gain.value = 0.25;
+  const chopDepth = ctx.createGain(); chopDepth.gain.value = 0.22;
+  lfo.connect(chopDepth).connect(chop.gain);
+  noise().connect(chopLP).connect(chop).connect(master);
+  // low thump layer
+  const thumpOsc = ctx.createOscillator(); thumpOsc.type = 'sine'; thumpOsc.frequency.value = 55; thumpOsc.start();
+  const thump = ctx.createGain(); thump.gain.value = 0.12;
+  const thumpDepth = ctx.createGain(); thumpDepth.gain.value = 0.12;
+  lfo.connect(thumpDepth).connect(thump.gain);
+  thumpOsc.connect(thump).connect(master);
+  // engine / turbine whine
+  const eng = ctx.createOscillator(); eng.type = 'sawtooth'; eng.frequency.value = 70; eng.start();
+  const engLP = ctx.createBiquadFilter(); engLP.type = 'lowpass'; engLP.frequency.value = 380;
+  const engG = ctx.createGain(); engG.gain.value = 0.05;
+  eng.connect(engLP).connect(engG).connect(master);
+  // wind (airspeed)
+  const windBP = ctx.createBiquadFilter(); windBP.type = 'bandpass'; windBP.frequency.value = 900; windBP.Q.value = 0.6;
+  const windG = ctx.createGain(); windG.gain.value = 0;
+  noise().connect(windBP).connect(windG).connect(master);
+  audio = { ctx, master, lfo, chopLP, chop, chopDepth, thumpOsc, eng, engLP, engG, windBP, windG };
+}
+function updateAudio() {
+  if (!audio) return;
+  const a = audio, t = a.ctx.currentTime, k = 0.08;
+  const on = opts.sound && running && !state.crashed;
+  const spin = state.rotorSpin, thr = state.throttle, spd = state.vel.length();
+  const rate = spin * (0.8 + 0.35 * thr) + Math.min(0.15, spd / 300);   // rotor speed
+  a.master.gain.setTargetAtTime(on ? opts.vol * (0.35 + 0.65 * spin) : 0, t, 0.1);
+  a.lfo.frequency.setTargetAtTime(3 + 13 * rate, t, k);                   // blade-pass rate
+  a.chopLP.frequency.setTargetAtTime(300 + 500 * rate + spd * 6, t, k);
+  a.chopDepth.gain.setTargetAtTime(0.14 + 0.16 * thr, t, k);              // heavier chop under load
+  a.thumpOsc.frequency.setTargetAtTime(45 + 20 * rate, t, k);
+  a.eng.frequency.setTargetAtTime(55 + 70 * rate + spd * 0.5, t, k);
+  a.engLP.frequency.setTargetAtTime(300 + 400 * thr, t, k);
+  a.windG.gain.setTargetAtTime(Math.min(0.35, (spd / 45) ** 2 * 0.35), t, k);
+  a.windBP.frequency.setTargetAtTime(600 + spd * 18, t, k);
+}
 
 let mode = 'free';
 document.querySelectorAll('.mode').forEach(b => b.onclick = () => {
@@ -744,6 +807,7 @@ function pause() {
 }
 let lastMode = null;
 $('start').onclick = () => {
+  if (opts.sound) initAudio();
   $('menu').style.display = 'none';
   running = true;
   if (lastMode !== mode) { lastMode = mode; respawn(); }
@@ -773,6 +837,7 @@ function frame(now) {
   sun.position.set(state.pos.x + 120, state.pos.y + 200, state.pos.z + 80); sun.target.position.copy(state.pos);
   updateCamera(dt);
   updateHUD();
+  updateAudio();
   renderer.render(scene, camera);
 }
 requestAnimationFrame(frame);
