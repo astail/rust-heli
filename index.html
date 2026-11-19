@@ -20,7 +20,18 @@
   #stats .row span:first-child { color: var(--muted); }
   #thrbar { height: 8px; background: rgba(255,255,255,.1); border-radius: 4px; margin-top: 6px; overflow: hidden; }
   #thrfill { height: 100%; width: 50%; background: var(--accent); }
-  #att { right: 16px; bottom: 16px; width: 170px; height: 170px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); }
+  #attWrap { right: 16px; bottom: 16px; }
+  #att { display: block; width: 170px; height: 170px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); }
+  /* HUD layout editing */
+  .rh { display: none; position: absolute; right: -8px; bottom: -8px; width: 16px; height: 16px; background: var(--accent); border: 2px solid #fff; border-radius: 4px; cursor: nwse-resize; }
+  body.hudedit .hud.movable { pointer-events: auto; outline: 2px dashed var(--accent); outline-offset: 3px; cursor: move; user-select: none; touch-action: none; }
+  body.hudedit .hud.movable .rh { display: block; }
+  body.hudedit #missionText:empty::before { content: 'ミッション表示'; color: var(--muted); }
+  #hudbar { position: fixed; left: 50%; bottom: 50%; transform: translate(-50%, 50%); z-index: 20; display: none; background: rgba(22,26,33,.95); border: 1px solid var(--accent); border-radius: 12px; padding: 14px 18px; text-align: center; font-size: 14px; }
+  body.hudedit #hudbar { display: block; }
+  #hudbar p { cursor: move; user-select: none; touch-action: none; margin: 0 0 10px; color: var(--muted); line-height: 1.6; }
+  #hudbar button, .hudbtn { background: #2a303a; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 16px; font: inherit; cursor: pointer; margin: 0 4px; }
+  #hudbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
   #mission { left: 50%; top: 14px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 16px; font-size: 15px; text-align: center; max-width: calc(100vw - 32px); }
   #mission b { color: var(--accent); }
   #toast { left: 50%; top: 40%; transform: translate(-50%,-50%); font-size: 34px; font-weight: 700; text-shadow: 0 2px 10px #000; opacity: 0; transition: opacity .3s; text-align: center; }
@@ -67,17 +78,17 @@
 <body>
 <canvas id="gl"></canvas>
 
-<div class="hud" id="mission"></div>
+<div class="hud movable" id="mission"><span id="missionText"></span></div>
 <div class="hud" id="toast"></div>
 <div class="hud" id="ceilWarn">高度制限</div>
-<div class="hud" id="keys">
+<div class="hud movable" id="keys">
   <div class="kgrid">
     <div></div><div class="k" id="kW">W</div><div></div>
     <div class="k" id="kA">A</div><div class="k" id="kS">S</div><div class="k" id="kD">D</div>
   </div>
   <div class="mwrap"><canvas id="mpad" width="140" height="140"></canvas><span>MOUSE</span></div>
 </div>
-<div class="hud" id="stats">
+<div class="hud movable" id="stats">
   <div class="row"><span>高度 (AGL)</span><span id="sAlt">0 m</span></div>
   <div class="row"><span>海抜 / 制限</span><span id="sCeil">0 m</span></div>
   <div class="row"><span>視点</span><span id="sCam">TPS</span></div>
@@ -87,7 +98,11 @@
   <div class="row"><span>スロットル</span><span id="sThr">0%</span></div>
   <div id="thrbar"><div id="thrfill"></div></div>
 </div>
-<canvas class="hud" id="att" width="340" height="340"></canvas>
+<div class="hud movable" id="attWrap"><canvas id="att" width="340" height="340"></canvas></div>
+<div id="hudbar">
+  <p><b style="color:var(--fg)">HUD 配置モード</b><br>枠をドラッグで移動 / 右下の角をドラッグ or ホイールでサイズ変更<br><small>(このパネルもここを掴んで動かせます)</small></p>
+  <button id="hudReset">初期配置に戻す</button><button id="hudDone" class="primary">完了</button>
+</div>
 
 <div id="menu">
   <div class="card">
@@ -142,6 +157,7 @@
         <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.25"></span></label>
     </div>
 
+    <div style="margin-top:14px"><button type="button" class="hudbtn" id="hudEdit">HUD の位置・サイズを変更</button></div>
     <button id="start">クリックしてスタート</button>
     <p class="note">PC + マウス推奨。開始するとマウスがロックされます (Esc で解除)。<br>
     Facepunch Studios とは無関係のファンメイド練習ツールです。挙動は本家を近似したもので完全一致ではありません。</p>
@@ -503,7 +519,7 @@ marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
 // ---------- input ----------
 const keys = {};
 addEventListener('keydown', e => {
-  if (e.code === 'Escape') { if (running) pause(); else silence(); return; }
+  if (e.code === 'Escape') { if (document.body.classList.contains('hudedit')) $('hudDone').click(); else if (running) pause(); else silence(); return; }
   keys[e.code] = true;
   if (e.code === 'KeyC' || e.code === 'KeyV') { camMode = CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]; if (running) toast('視点: ' + CAMS[camMode], 'var(--fg)', 900); }
   if (e.code === 'KeyR' && running) respawn();
@@ -769,7 +785,7 @@ function updateMode(dt) {
     if (M.hoverT >= 20) { finish('best_hover', 'ホバリング達成'); return; }
   }
   M.lastPos.copy(state.pos);
-  $('mission').innerHTML = msg;
+  $('missionText').innerHTML = msg;
 }
 
 let toastTimer = 0;
@@ -825,6 +841,72 @@ function updateCamera(dt) {
   camera.lookAt(look);
   if (FOLLOW[camMode]) camera.quaternion.multiply(tiltQ);
 }
+
+// ---------- HUD layout (move / resize, persisted) ----------
+const HUD_IDS = ['stats', 'attWrap', 'keys', 'mission'];
+let hudLayout = store.get('hudlayout', {});
+function applyHudLayout() {
+  for (const id of HUD_IDS) {
+    const el = $(id), L = hudLayout[id];
+    if (!L) { el.style.cssText = ''; continue; }
+    const s = L.s || 1;
+    el.style.left = Math.round(L.x * innerWidth) + 'px'; el.style.top = Math.round(L.y * innerHeight) + 'px';
+    el.style.right = el.style.bottom = 'auto';
+    el.style.transform = `scale(${s})`; el.style.transformOrigin = 'top left';
+    // keep it on screen after window resizes
+    const r = el.getBoundingClientRect();
+    if (r.right > innerWidth) el.style.left = Math.max(0, innerWidth - r.width) + 'px';
+    if (r.bottom > innerHeight) el.style.top = Math.max(0, innerHeight - r.height) + 'px';
+  }
+}
+function captureHud(el) {
+  // freeze current on-screen box into an explicit layout entry
+  const r = el.getBoundingClientRect(), cur = hudLayout[el.id];
+  hudLayout[el.id] = { x: r.left / innerWidth, y: r.top / innerHeight, s: cur ? cur.s : 1 };
+  applyHudLayout();
+}
+for (const id of HUD_IDS) {
+  const el = $(id);
+  const h = document.createElement('div'); h.className = 'rh'; el.appendChild(h);
+  el.addEventListener('pointerdown', e => {
+    if (!document.body.classList.contains('hudedit')) return;
+    e.preventDefault(); captureHud(el);
+    const L = hudLayout[id], r0 = el.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+    const resize = e.target === h, s0 = L.s, x0 = L.x * innerWidth, y0 = L.y * innerHeight;
+    el.setPointerCapture(e.pointerId);
+    const move = ev => {
+      if (resize) {
+        L.s = THREE.MathUtils.clamp(s0 * (r0.width + ev.clientX - sx) / r0.width, 0.4, 3);
+      } else {
+        L.x = THREE.MathUtils.clamp(x0 + ev.clientX - sx, 0, innerWidth - r0.width) / innerWidth;
+        L.y = THREE.MathUtils.clamp(y0 + ev.clientY - sy, 0, innerHeight - r0.height) / innerHeight;
+      }
+      applyHudLayout();
+    };
+    const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); store.set('hudlayout', hudLayout); };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+  });
+  el.addEventListener('wheel', e => {
+    if (!document.body.classList.contains('hudedit')) return;
+    e.preventDefault(); captureHud(el);
+    const L = hudLayout[id]; L.s = THREE.MathUtils.clamp(L.s * (e.deltaY < 0 ? 1.08 : 1 / 1.08), 0.4, 3);
+    applyHudLayout(); store.set('hudlayout', hudLayout);
+  }, { passive: false });
+}
+// the edit bar itself can be dragged out of the way
+$('hudbar').querySelector('p').addEventListener('pointerdown', e => {
+  const bar = $('hudbar'), r = bar.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+  bar.style.transform = 'none'; bar.style.left = r.left + 'px'; bar.style.top = r.top + 'px'; bar.style.bottom = 'auto';
+  e.target.setPointerCapture(e.pointerId);
+  const mv = ev => { bar.style.left = THREE.MathUtils.clamp(ev.clientX - dx, 0, innerWidth - r.width) + 'px'; bar.style.top = THREE.MathUtils.clamp(ev.clientY - dy, 0, innerHeight - r.height) + 'px'; };
+  const up = () => { e.target.removeEventListener('pointermove', mv); e.target.removeEventListener('pointerup', up); };
+  e.target.addEventListener('pointermove', mv); e.target.addEventListener('pointerup', up);
+});
+$('hudEdit').onclick = () => { $('menu').style.display = 'none'; document.body.classList.add('hudedit'); };
+$('hudDone').onclick = () => { document.body.classList.remove('hudedit'); $('menu').style.display = 'flex'; };
+$('hudReset').onclick = () => { hudLayout = {}; store.set('hudlayout', hudLayout); applyHudLayout(); };
+addEventListener('resize', applyHudLayout);
+applyHudLayout();
 
 // ---------- HUD ----------
 const att = $('att'), actx = att.getContext('2d');
