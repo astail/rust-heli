@@ -96,7 +96,7 @@
       <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
-      <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (TPS / チェイス / コックピット / 俯瞰)</td></tr>
+      <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
       <tr><td><kbd>R</kbd></td><td>リスポーン</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>一時停止 / メニュー</td></tr>
     </table>
@@ -112,8 +112,8 @@
       </label>
       <label>デフォルト視点
         <select id="optCam">
-          <option value="0">TPS (近め)</option><option value="1">チェイス (遠め)</option>
-          <option value="2">コックピット</option><option value="3">俯瞰</option>
+          <option value="2">コックピット</option><option value="4">近接 (コックピット寄り)</option>
+          <option value="0">TPS (近め)</option><option value="1">チェイス (遠め)</option><option value="3">俯瞰</option>
         </select>
       </label>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
@@ -339,7 +339,7 @@ marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (e.code === 'KeyC' || e.code === 'KeyV') { camMode = (camMode + 1) % CAMS.length; if (running) toast('視点: ' + CAMS[camMode], 'var(--fg)', 900); }
+  if (e.code === 'KeyC' || e.code === 'KeyV') { camMode = CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]; if (running) toast('視点: ' + CAMS[camMode], 'var(--fg)', 900); }
   if (e.code === 'KeyR' && running) respawn();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -359,13 +359,14 @@ const state = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(),
   angVel: new THREE.Vector3(), throttle: 0, rotorSpin: 0, crashed: false, grounded: true
 };
-const CAMS = ['TPS', 'チェイス', 'コックピット', '俯瞰'];
+const CAMS = ['TPS', 'チェイス', 'コックピット', '俯瞰', '近接'];
+const CAM_ORDER = [2, 4, 0, 1, 3]; // cockpit -> close -> TPS -> chase -> overhead
 let running = false, camMode = opts.cam, crashTimer = 0;
 const spawn = { pos: new THREE.Vector3(0, HOME.top, 4), yaw: 0 };
 
 function respawn() {
   state.pos.copy(spawn.pos); state.vel.set(0, 0, 0); state.angVel.set(0, 0, 0);
-  state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0));
+  state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0)); ctrl.set(0, 0, 0);
   state.throttle = 0; state.crashed = false; state.grounded = true; crashTimer = 0;
   heli.visible = true;
   startMode();
@@ -379,6 +380,7 @@ function groundAt(x, z, footprint = 1.2) {
   return { h, solid };
 }
 
+const ctrl = new THREE.Vector3(); let turbT = 0;
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 function attitude() {
   // pitch / roll relative to horizon, in degrees
@@ -415,8 +417,8 @@ function stepPhysics(dt) {
   const up = keys.KeyW ? 1 : 0, down = keys.KeyS ? 1 : 0;
   let target = up && !down ? 1 : down && !up ? 0 : 0.5;
   if (state.grounded && !up) target = down ? 0 : 0.0;
-  state.throttle += (target - state.throttle) * Math.min(1, dt * 3.5);
-  state.rotorSpin += ((state.grounded && state.throttle < 0.05 ? 0.25 : 1) - state.rotorSpin) * Math.min(1, dt * 1.5);
+  state.throttle += (target - state.throttle) * Math.min(1, dt * 1.3); // collective lags like a heavy rotor
+  state.rotorSpin += ((state.grounded && state.throttle < 0.05 ? 0.25 : 1) - state.rotorSpin) * Math.min(1, dt * 0.6); // engine spool-up
 
   // --- angular input ---
   const sens = 0.0035 * opts.sens;
@@ -426,23 +428,27 @@ function stepPhysics(dt) {
   mouseDX = mouseDY = 0;
   const yawIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
 
+  // mouse feeds a control rate; the airframe's rotational inertia follows it with lag
+  if (!state.grounded) { ctrl.x += pitchIn * 11; ctrl.z += rollIn * 11; }
+  ctrl.x = THREE.MathUtils.clamp(ctrl.x, -1.6, 1.6); ctrl.z = THREE.MathUtils.clamp(ctrl.z, -1.6, 1.6);
+  const cd = Math.exp(-dt * 4.5); ctrl.x *= cd; ctrl.z *= cd;
+  const inertia = Math.min(1, dt * 3.2);
+  state.angVel.x += (ctrl.x - state.angVel.x) * inertia;
+  state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
+  const yawTarget = yawIn * 1.05 * (state.grounded ? 0.0 : 1);
+  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 1.6);
+  // light turbulence
   if (!state.grounded) {
-    state.angVel.x += pitchIn / Math.max(dt, 1e-3) * 0.06; // impulse -> rate
-    state.angVel.z += rollIn / Math.max(dt, 1e-3) * 0.06;
+    turbT += dt;
+    ctrl.x += Math.sin(turbT * 1.7) * Math.sin(turbT * 0.63) * dt * 0.05;
+    ctrl.z += Math.sin(turbT * 1.3 + 2) * Math.sin(turbT * 0.41) * dt * 0.05;
   }
-  state.angVel.x = THREE.MathUtils.clamp(state.angVel.x, -3, 3);
-  state.angVel.z = THREE.MathUtils.clamp(state.angVel.z, -3, 3);
-  const yawTarget = yawIn * 1.6 * (state.grounded ? 0.0 : 1);
-  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 4);
-  // damping (Rust's copter holds attitude after mouse input stops)
-  const damp = Math.exp(-dt * 6);
-  state.angVel.x *= damp; state.angVel.z *= damp;
 
   // auto-level assist
   if (opts.assist && !state.grounded) {
     const a = attitude();
-    if (Math.abs(pitchIn) < 1e-4) state.angVel.x -= (a.pitch / 57.3) * dt * 2.2;
-    if (Math.abs(rollIn) < 1e-4) state.angVel.z += (a.roll / 57.3) * dt * 2.2;
+    if (Math.abs(pitchIn) < 1e-4) ctrl.x -= (a.pitch / 57.3) * dt * 6;
+    if (Math.abs(rollIn) < 1e-4) ctrl.z += (a.roll / 57.3) * dt * 6;
   }
 
   // apply local rotation (pitch about x, roll about z), yaw about world up
@@ -453,7 +459,8 @@ function stepPhysics(dt) {
 
   // --- forces ---
   // thrust relative to hover: 0 -> 0.55g, 0.5 -> ~0.95g (slow sink), 1 -> 1.75g
-  const thrustG = state.throttle < 0.5 ? 0.55 + state.throttle * 0.8 : 0.95 + (state.throttle - 0.5) * 1.6;
+  // heavy airframe: little excess power (max ~1.4g), neutral = slow sink
+  const thrustG = state.throttle < 0.5 ? 0.6 + state.throttle * 0.7 : 0.95 + (state.throttle - 0.5) * 0.9;
   let thrust = thrustG * G * state.rotorSpin;
   // altitude ceiling: lift fades out over the last 15 m, then gets pushed back down
   if (opts.ceil > 0) {
@@ -466,8 +473,8 @@ function stepPhysics(dt) {
   acc.y -= G;
   // drag
   const hv = new THREE.Vector3(state.vel.x, 0, state.vel.z);
-  acc.addScaledVector(hv, -0.08 - 0.0025 * hv.length());
-  acc.y -= state.vel.y * 0.35;
+  acc.addScaledVector(hv, -0.025 - 0.0035 * hv.length());
+  acc.y -= state.vel.y * 0.24;
   // ground effect
   if (state.grounded && acc.y < 0) acc.y = 0;
   state.vel.addScaledVector(acc, dt);
@@ -502,7 +509,7 @@ function stepPhysics(dt) {
     _e.setFromQuaternion(state.q, 'YXZ');
     _e.x *= Math.exp(-dt * 8); _e.z *= Math.exp(-dt * 8);
     state.q.setFromEuler(_e);
-    state.angVel.x = state.angVel.z = 0;
+    state.angVel.x = state.angVel.z = 0; ctrl.x = ctrl.z = 0;
   } else if (state.pos.y > gnd.h + 0.15) {
     state.grounded = false;
   }
@@ -609,10 +616,12 @@ function updateCamera(dt) {
     return;
   }
   if (!state.crashed) heli.visible = true;
+  const bladeOp = camMode === 4 ? 0.22 : 1;
+  rotor.children.forEach(b => { b.material.transparent = bladeOp < 1; b.material.opacity = bladeOp; });
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
   if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
   // [back, up, lookAhead, lookUp, follow stiffness]
-  const cfg = [[8, 2.4, 8, 3.2, 9], [13, 4.8, 0, 1.8, 5], null, [22, 26, 4, 0, 4]][camMode];
+  const cfg = [[8, 2.4, 8, 3.2, 5], [13, 4.8, 0, 1.8, 3.5], null, [22, 26, 4, 0, 4], [4.2, 3.3, 16, 2.2, 10]][camMode];
   const desired = state.pos.clone().addScaledVector(fwd, -cfg[0]).add(new THREE.Vector3(0, cfg[1], 0));
   const gh = groundAt(desired.x, desired.z, 0).h + 1;
   if (desired.y < gh) desired.y = gh;
