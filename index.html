@@ -93,7 +93,7 @@
     <table class="ctl">
       <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
       <tr><td><kbd>S</kbd></td><td>スロットル下降 (降下)</td></tr>
-      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す)</td></tr>
+      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す + 旋回方向へ傾く)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
       <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
@@ -103,7 +103,7 @@
 
     <h2>設定</h2>
     <div class="opts">
-      <label>マウス感度 <input type="range" id="optSens" min="0.05" max="3" step="0.05" value="1"><span id="optSensV">1.00</span></label>
+      <label>マウス感度 <input type="range" id="optSens" min="0.01" max="3" step="0.01" value="1"><span id="optSensV">1.00</span></label>
       <label>高度制限
         <select id="optCeil">
           <option value="0">なし</option><option value="50">50 m</option><option value="100">100 m</option>
@@ -366,7 +366,7 @@ const spawn = { pos: new THREE.Vector3(0, HOME.top, 4), yaw: 0 };
 
 function respawn() {
   state.pos.copy(spawn.pos); state.vel.set(0, 0, 0); state.angVel.set(0, 0, 0);
-  state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0)); ctrl.set(0, 0, 0);
+  state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0)); ctrl.set(0, 0, 0); bank = 0;
   state.throttle = 0; state.crashed = false; state.grounded = true; crashTimer = 0;
   heli.visible = true;
   startMode();
@@ -380,7 +380,7 @@ function groundAt(x, z, footprint = 1.2) {
   return { h, solid };
 }
 
-const ctrl = new THREE.Vector3(); let turbT = 0;
+const ctrl = new THREE.Vector3(); let turbT = 0, bank = 0;
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 function attitude() {
   // pitch / roll relative to horizon, in degrees
@@ -437,6 +437,12 @@ function stepPhysics(dt) {
   state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
   const yawTarget = yawIn * 1.05 * (state.grounded ? 0.0 : 1);
   state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 1.6);
+  // A/D also banks the airframe into the turn (returns when released)
+  const bankTarget = state.grounded ? 0 : yawIn * 0.28;
+  const bankNew = bank + (bankTarget - bank) * Math.min(1, dt * 2.2);
+  _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), bankNew - bank);
+  state.q.multiply(_q);
+  bank = bankNew;
   // light turbulence
   if (!state.grounded) {
     turbT += dt;
@@ -509,7 +515,7 @@ function stepPhysics(dt) {
     _e.setFromQuaternion(state.q, 'YXZ');
     _e.x *= Math.exp(-dt * 8); _e.z *= Math.exp(-dt * 8);
     state.q.setFromEuler(_e);
-    state.angVel.x = state.angVel.z = 0; ctrl.x = ctrl.z = 0;
+    state.angVel.x = state.angVel.z = 0; ctrl.x = ctrl.z = 0; bank = 0;
   } else if (state.pos.y > gnd.h + 0.15) {
     state.grounded = false;
   }
