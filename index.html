@@ -109,7 +109,7 @@
 
     <h2>設定</h2>
     <div class="opts">
-      <label>マウス感度 <input type="range" id="optSens" min="0.01" max="3" step="0.01" value="1"><span id="optSensV">1.00</span></label>
+      <label>マウス感度 <input type="range" id="optSens" min="0.01" max="3" step="0.01" value="0.5"><span id="optSensV">0.50</span></label>
       <label>高度制限
         <select id="optCeil">
           <option value="0">なし</option><option value="50">50 m</option><option value="100">100 m</option>
@@ -158,14 +158,14 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('rhtr_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('rhtr_' + k, JSON.stringify(v)); } catch {} }
 };
-const opts = { sens: store.get('sens', 1), invert: store.get('invert', false), assist: store.get('assist', false),
+const opts = { sens: store.get('sens2', 0.5), invert: store.get('invert', false), assist: store.get('assist', false),
   ceil: store.get('ceil', 150), cam: store.get('cam2', 5) };
 $('optSens').value = opts.sens; $('optSensV').textContent = (+opts.sens).toFixed(2);
 $('optCeil').value = opts.ceil; $('optCam').value = opts.cam;
 $('optCeil').onchange = e => { opts.ceil = +e.target.value; store.set('ceil', opts.ceil); };
 $('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam2', opts.cam); camMode = opts.cam; };
 $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
-$('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens', opts.sens); };
+$('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens2', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
 // per-view camera offsets  (0 TPS, 1 chase, 2 cockpit, 3 overhead, 4 close, 5 cabin)
