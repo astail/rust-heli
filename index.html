@@ -591,18 +591,18 @@ function stepPhysics(dt) {
   const yawIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
 
   // mouse feeds a control rate; the airframe's rotational inertia follows it with lag
-  if (!state.grounded) { ctrl.x += pitchIn * 11; ctrl.z += rollIn * 11; }
-  ctrl.x = THREE.MathUtils.clamp(ctrl.x, -1.6, 1.6); ctrl.z = THREE.MathUtils.clamp(ctrl.z, -1.6, 1.6);
-  const cd = Math.exp(-dt * 4.5); ctrl.x *= cd; ctrl.z *= cd;
-  const inertia = Math.min(1, dt * 3.2);
+  if (!state.grounded) { ctrl.x += pitchIn * 6; ctrl.z += rollIn * 6; }
+  ctrl.x = THREE.MathUtils.clamp(ctrl.x, -0.9, 0.9); ctrl.z = THREE.MathUtils.clamp(ctrl.z, -0.9, 0.9);
+  const cd = Math.exp(-dt * 2.5); ctrl.x *= cd; ctrl.z *= cd;
+  const inertia = Math.min(1, dt * 1.5); // heavy airframe: slow to start and to stop rotating
   state.angVel.x += (ctrl.x - state.angVel.x) * inertia;
   state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
-  const yawTarget = yawIn * 1.05 * (state.grounded ? 0.0 : 1);
-  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 1.6);
+  const yawTarget = yawIn * 0.8 * (state.grounded ? 0.0 : 1);
+  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.9);
   // A/D also rolls the airframe into the turn; it does NOT level itself afterwards
   // (like Rust, you have to correct the bank with the mouse)
   if (!state.grounded && yawIn) {
-    _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), yawIn * 0.38 * dt);
+    _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), yawIn * 0.3 * dt);
     state.q.multiply(_q);
   }
   // light turbulence
