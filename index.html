@@ -50,7 +50,8 @@
   .camfs { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; display: grid; gap: 6px; margin: 0; }
   .camfs legend { color: var(--muted); padding: 0 6px; font-size: 13px; }
   .camfs legend button { margin-left: 8px; background: #2a303a; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer; }
-  .cl { width: 80px; color: var(--muted); }
+  .camfs select { font-size: 12px; padding: 1px 4px; margin-left: 6px; }
+  .cl { width: 92px; color: var(--muted); }
   .cv { width: 64px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
   .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
   #start { margin-top: 20px; width: 100%; padding: 14px; font-size: 17px; font-weight: 700; background: var(--accent); color: #fff; border: 0; border-radius: 10px; cursor: pointer; }
@@ -122,12 +123,17 @@
         </select>
       </label>
       <fieldset class="camfs">
-        <legend>機内視点のカメラ位置 <button type="button" id="camReset">リセット</button></legend>
-        <label><span class="cl">距離</span><input type="range" id="cDist" min="0.6" max="3.5" step="0.05"><span class="cv" id="cDistV"></span></label>
-        <label><span class="cl">高さ</span><input type="range" id="cHeight" min="1.3" max="3.2" step="0.05"><span class="cv" id="cHeightV"></span></label>
-        <label><span class="cl">左右</span><input type="range" id="cSide" min="-0.6" max="0.6" step="0.02"><span class="cv" id="cSideV"></span></label>
-        <label><span class="cl">下向き角度</span><input type="range" id="cTilt" min="-10" max="35" step="1"><span class="cv" id="cTiltV"></span></label>
-        <small style="color:var(--muted)">飛行中はマウスホイールで距離を調整できます</small>
+        <legend>視点ごとのカメラ位置
+          <select id="camEdit">
+            <option value="5">機内</option><option value="2">コックピット</option><option value="4">近接</option>
+            <option value="0">TPS</option><option value="1">チェイス</option><option value="3">俯瞰</option>
+          </select>
+          <button type="button" id="camReset">この視点をリセット</button></legend>
+        <label><span class="cl">距離 (後方+)</span><input type="range" id="cDist"><span class="cv" id="cDistV"></span></label>
+        <label><span class="cl">高さ</span><input type="range" id="cHeight"><span class="cv" id="cHeightV"></span></label>
+        <label><span class="cl">左右</span><input type="range" id="cSide"><span class="cv" id="cSideV"></span></label>
+        <label><span class="cl">下向き角度</span><input type="range" id="cTilt" min="-45" max="60" step="1"><span class="cv" id="cTiltV"></span></label>
+        <small style="color:var(--muted)">距離・高さはマイナスも可 (前方 / 機体の下)。飛行中はマウスホイールで今の視点の距離を調整できます</small>
       </fieldset>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
@@ -162,20 +168,42 @@ $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
-// in-cabin camera offsets
-const CAB_DEF = { dist: 1.45, height: 2.0, side: 0.34, tilt: 11 };
-const cab = Object.assign({}, CAB_DEF, store.get('cab', {}));
-const cabUI = [['cDist', 'dist', v => v.toFixed(2) + ' m'], ['cHeight', 'height', v => v.toFixed(2) + ' m'],
+// per-view camera offsets  (0 TPS, 1 chase, 2 cockpit, 3 overhead, 4 close, 5 cabin)
+const CAM_DEF = {
+  0: { dist: 8, height: 2.4, side: 0, tilt: 0 },   1: { dist: 13, height: 4.8, side: 0, tilt: 0 },
+  2: { dist: -0.6, height: 1.35, side: 0, tilt: 0 }, 3: { dist: 22, height: 26, side: 0, tilt: 0 },
+  4: { dist: 4.2, height: 3.3, side: 0, tilt: 0 }, 5: { dist: 1.45, height: 2.0, side: 0.34, tilt: 11 }
+};
+// symmetric slider ranges: [dist ±, height ±, side ±]
+const CAM_RANGE = { 0: [20, 20, 6], 1: [30, 30, 10], 2: [3.5, 3.5, 1.5], 3: [50, 50, 20], 4: [8, 8, 3], 5: [3.5, 3.5, 1.5] };
+const camCfg = {};
+{
+  const saved = store.get('camcfg', {}), oldCab = store.get('cab', null);
+  for (const k in CAM_DEF) camCfg[k] = Object.assign({}, CAM_DEF[k], k === '5' && oldCab ? oldCab : {}, saved[k] || {});
+}
+let camEdit = opts.cam;
+const camUI = [['cDist', 'dist', v => v.toFixed(2) + ' m'], ['cHeight', 'height', v => v.toFixed(2) + ' m'],
   ['cSide', 'side', v => (v > 0 ? '右 ' : v < 0 ? '左 ' : '') + Math.abs(v).toFixed(2)], ['cTilt', 'tilt', v => v.toFixed(0) + '°']];
-function syncCabUI() { for (const [id, k, f] of cabUI) { $(id).value = cab[k]; $(id + 'V').textContent = f(cab[k]); } }
-for (const [id, k, f] of cabUI) $(id).oninput = e => { cab[k] = +e.target.value; $(id + 'V').textContent = f(cab[k]); store.set('cab', cab); };
-$('camReset').onclick = () => { Object.assign(cab, CAB_DEF); store.set('cab', cab); syncCabUI(); };
-syncCabUI();
+function syncCamUI() {
+  const c = camCfg[camEdit], r = CAM_RANGE[camEdit];
+  $('camEdit').value = camEdit;
+  [['cDist', r[0]], ['cHeight', r[1]], ['cSide', r[2]]].forEach(([id, m]) => {
+    const el = $(id); el.min = -m; el.max = m; el.step = m > 10 ? 0.1 : 0.05;
+  });
+  for (const [id, k, f] of camUI) { $(id).value = c[k]; $(id + 'V').textContent = f(c[k]); }
+}
+for (const [id, k, f] of camUI) $(id).oninput = e => {
+  camCfg[camEdit][k] = +e.target.value; $(id + 'V').textContent = f(camCfg[camEdit][k]); store.set('camcfg', camCfg);
+};
+$('camEdit').onchange = e => { camEdit = +e.target.value; syncCamUI(); };
+$('camReset').onclick = () => { camCfg[camEdit] = Object.assign({}, CAM_DEF[camEdit]); store.set('camcfg', camCfg); syncCamUI(); };
+syncCamUI();
 addEventListener('wheel', e => {
-  if (!running || camMode !== 5) return;
-  cab.dist = THREE.MathUtils.clamp(cab.dist + Math.sign(e.deltaY) * 0.15, 0.6, 3.5);
-  store.set('cab', cab); syncCabUI();
-  toast('距離 ' + cab.dist.toFixed(2) + ' m', 'var(--fg)', 600);
+  if (!running) return;
+  const c = camCfg[camMode], m = CAM_RANGE[camMode][0];
+  c.dist = THREE.MathUtils.clamp(c.dist + Math.sign(e.deltaY) * m / 25, -m, m);
+  store.set('camcfg', camCfg);
+  toast(CAMS[camMode] + ' 距離 ' + c.dist.toFixed(2) + ' m', 'var(--fg)', 600);
 }, { passive: true });
 // sound is on by default at 1/4 volume; the choice is remembered
 opts.sound = store.get('sound', true); opts.vol = store.get('vol2', 0.25);
@@ -216,11 +244,7 @@ function initAudio() {
   const engLP = ctx.createBiquadFilter(); engLP.type = 'lowpass'; engLP.frequency.value = 380;
   const engG = ctx.createGain(); engG.gain.value = 0.05;
   eng.connect(engLP).connect(engG).connect(master);
-  // wind (airspeed)
-  const windBP = ctx.createBiquadFilter(); windBP.type = 'bandpass'; windBP.frequency.value = 900; windBP.Q.value = 0.6;
-  const windG = ctx.createGain(); windG.gain.value = 0;
-  noise().connect(windBP).connect(windG).connect(master);
-  audio = { ctx, master, lfo, chopLP, chop, chopDepth, thumpOsc, eng, engLP, engG, windBP, windG };
+  audio = { ctx, master, lfo, chopLP, chop, chopDepth, thumpOsc, eng, engLP, engG };
 }
 function updateAudio() {
   if (!audio) return;
@@ -230,13 +254,11 @@ function updateAudio() {
   const rate = spin * (0.8 + 0.35 * thr) + Math.min(0.15, spd / 300);   // rotor speed
   a.master.gain.setTargetAtTime(on ? opts.vol * (0.35 + 0.65 * spin) : 0, t, 0.1);
   a.lfo.frequency.setTargetAtTime(3 + 13 * rate, t, k);                   // blade-pass rate
-  a.chopLP.frequency.setTargetAtTime(300 + 500 * rate + spd * 6, t, k);
+  a.chopLP.frequency.setTargetAtTime(300 + 500 * rate, t, k);
   a.chopDepth.gain.setTargetAtTime(0.14 + 0.16 * thr, t, k);              // heavier chop under load
   a.thumpOsc.frequency.setTargetAtTime(45 + 20 * rate, t, k);
   a.eng.frequency.setTargetAtTime(55 + 70 * rate + spd * 0.5, t, k);
   a.engLP.frequency.setTargetAtTime(300 + 400 * thr, t, k);
-  a.windG.gain.setTargetAtTime(Math.min(0.35, (spd / 45) ** 2 * 0.35), t, k);
-  a.windBP.frequency.setTargetAtTime(600 + spd * 18, t, k);
 }
 
 let mode = 'free';
@@ -755,10 +777,14 @@ function toast(html, color = 'var(--fg)', ms = 1800) {
 // ---------- camera ----------
 const camPos = new THREE.Vector3(0, 8, 14), camQ = new THREE.Quaternion();
 function updateCamera(dt) {
+  const cc = camCfg[camMode];
+  const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -cc.tilt / 57.3);
   if (camMode === 2 && !state.crashed) {
-    const p = new THREE.Vector3(0, 1.35, -0.6).applyQuaternion(state.q).add(state.pos);
-    camera.position.copy(p); camera.quaternion.copy(state.q);
-    heli.visible = false;
+    const p = new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(state.q).add(state.pos);
+    camera.position.copy(p); camera.quaternion.copy(state.q).multiply(tiltQ);
+    // hide the airframe only while the eye is inside the fuselage
+    const inside = Math.abs(cc.side) < 0.75 && cc.dist > -1.3 && cc.dist < 1.2 && cc.height > 0.3 && cc.height < 1.6;
+    heli.visible = !inside; cabin.visible = false; hull.visible = canopy.visible = mast.visible = true;
     return;
   }
   if (!state.crashed) heli.visible = true;
@@ -766,9 +792,9 @@ function updateCamera(dt) {
   cabin.visible = inCabin; hull.visible = canopy.visible = mast.visible = !inCabin;
   if (inCabin) {
     rotor.children.forEach(b => { b.material.transparent = true; b.material.opacity = 0.15; });
-    camera.position.copy(new THREE.Vector3(cab.side, cab.height, cab.dist).applyQuaternion(state.q).add(state.pos));
+    camera.position.copy(new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(state.q).add(state.pos));
     // head lags the airframe slightly
-    const tq = state.q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -cab.tilt / 57.3));
+    const tq = state.q.clone().multiply(tiltQ);
     camQ.slerp(tq, 1 - Math.exp(-dt * 9));
     camera.quaternion.copy(camQ);
     camPos.copy(camera.position);
@@ -779,15 +805,17 @@ function updateCamera(dt) {
   rotor.children.forEach(b => { b.material.transparent = bladeOp < 1; b.material.opacity = bladeOp; });
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
   if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
-  // [back, up, lookAhead, lookUp, follow stiffness]
-  const cfg = [[8, 2.4, 8, 3.2, 5], [13, 4.8, 0, 1.8, 3.5], null, [22, 26, 4, 0, 4], [4.2, 3.3, 16, 2.2, 10]][camMode];
-  const desired = state.pos.clone().addScaledVector(fwd, -cfg[0]).add(new THREE.Vector3(0, cfg[1], 0));
+  // [lookAhead, lookUp, follow stiffness]
+  const cfg = [[8, 3.2, 5], [0, 1.8, 3.5], null, [4, 0, 4], [16, 2.2, 10]][camMode];
+  const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+  const desired = state.pos.clone().addScaledVector(fwd, -cc.dist).addScaledVector(right, cc.side).add(new THREE.Vector3(0, cc.height, 0));
   const gh = groundAt(desired.x, desired.z, 0).h + 1;
   if (desired.y < gh) desired.y = gh;
-  camPos.lerp(desired, 1 - Math.exp(-dt * cfg[4]));
+  camPos.lerp(desired, 1 - Math.exp(-dt * cfg[2]));
   camera.position.copy(camPos);
-  const look = state.pos.clone().addScaledVector(fwd, cfg[2]); look.y += cfg[3];
+  const look = state.pos.clone().addScaledVector(fwd, cfg[0]).addScaledVector(right, cc.side); look.y += cfg[1];
   camera.lookAt(look);
+  camera.quaternion.multiply(tiltQ);
 }
 
 // ---------- HUD ----------
@@ -831,6 +859,7 @@ function updateHUD() {
 
 // ---------- menu / loop ----------
 function pause() {
+  camEdit = camMode; syncCamUI();
   running = false; $('menu').style.display = 'flex'; $('start').textContent = '再開 (クリック)';
 }
 let lastMode = null;
