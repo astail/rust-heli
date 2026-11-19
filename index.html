@@ -25,7 +25,10 @@
   #mission b { color: var(--accent); }
   #toast { left: 50%; top: 40%; transform: translate(-50%,-50%); font-size: 34px; font-weight: 700; text-shadow: 0 2px 10px #000; opacity: 0; transition: opacity .3s; text-align: center; }
   #ceilWarn { left: 50%; top: 62px; transform: translateX(-50%); background: rgba(224,80,80,.85); color: #fff; font-weight: 700; padding: 4px 14px; border-radius: 6px; display: none; }
-  #keys { right: 16px; top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; }
+  #keys { right: 16px; top: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; display: flex; gap: 12px; align-items: center; }
+  .kgrid { display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; }
+  .mwrap { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); letter-spacing: .08em; }
+  #mpad { width: 70px; height: 70px; }
   .k { border: 1px solid var(--line); border-radius: 5px; text-align: center; padding: 4px 0; color: var(--muted); }
   .k.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   /* settings live in a left side panel so the view stays visible while adjusting the camera */
@@ -68,8 +71,11 @@
 <div class="hud" id="toast"></div>
 <div class="hud" id="ceilWarn">高度制限</div>
 <div class="hud" id="keys">
-  <div></div><div class="k" id="kW">W</div><div></div>
-  <div class="k" id="kA">A</div><div class="k" id="kS">S</div><div class="k" id="kD">D</div>
+  <div class="kgrid">
+    <div></div><div class="k" id="kW">W</div><div></div>
+    <div class="k" id="kA">A</div><div class="k" id="kS">S</div><div class="k" id="kD">D</div>
+  </div>
+  <div class="mwrap"><canvas id="mpad" width="140" height="140"></canvas><span>MOUSE</span></div>
 </div>
 <div class="hud" id="stats">
   <div class="row"><span>高度 (AGL)</span><span id="sAlt">0 m</span></div>
@@ -497,15 +503,16 @@ marker.rotation.x = Math.PI; marker.visible = false; scene.add(marker);
 // ---------- input ----------
 const keys = {};
 addEventListener('keydown', e => {
+  if (e.code === 'Escape') { if (running) pause(); else silence(); return; }
   keys[e.code] = true;
   if (e.code === 'KeyC' || e.code === 'KeyV') { camMode = CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]; if (running) toast('視点: ' + CAMS[camMode], 'var(--fg)', 900); }
   if (e.code === 'KeyR' && running) respawn();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-let mouseDX = 0, mouseDY = 0;
+let mouseDX = 0, mouseDY = 0, padAX = 0, padAY = 0;
 document.addEventListener('mousemove', e => {
-  if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; }
+  if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; padAX += e.movementX; padAY += e.movementY; }
 });
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== canvas && running) pause();
@@ -553,7 +560,7 @@ function upY() { return _v.set(0, 1, 0).applyQuaternion(state.q).y; }
 
 function crash(reason) {
   if (state.crashed) return;
-  state.crashed = true; crashTimer = 2.2;
+  state.crashed = true; crashTimer = 0.7;
   toast('CRASH! ' + reason, 'var(--bad)');
   explode(state.pos);
 }
@@ -804,16 +811,19 @@ function updateCamera(dt) {
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
   if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); fwd.normalize();
   // [lookAhead, lookUp, follow stiffness]
-  const cfg = [[8, 3.2, 5], [0, 1.8, 3.5], null, [4, 0, 4], [16, 2.2, 10]][camMode];
+  const FOLLOW = [[8, 3.2, 5], [0, 1.8, 3.5], null, [4, 0, 4], [16, 2.2, 10]];
+  // cockpit / cabin / pilot views have no follow setup: watch the crash from the chase camera
+  const cfg = FOLLOW[camMode] || FOLLOW[1];
+  const fc = FOLLOW[camMode] ? cc : camCfg[1];
   const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-  const desired = state.pos.clone().addScaledVector(fwd, -cc.dist).addScaledVector(right, cc.side).add(new THREE.Vector3(0, cc.height, 0));
+  const desired = state.pos.clone().addScaledVector(fwd, -fc.dist).addScaledVector(right, fc.side).add(new THREE.Vector3(0, fc.height, 0));
   const gh = groundAt(desired.x, desired.z, 0).h + 1;
   if (desired.y < gh) desired.y = gh;
   camPos.lerp(desired, 1 - Math.exp(-dt * cfg[2]));
   camera.position.copy(camPos);
-  const look = state.pos.clone().addScaledVector(fwd, cfg[0]).addScaledVector(right, cc.side); look.y += cfg[1];
+  const look = state.pos.clone().addScaledVector(fwd, cfg[0]).addScaledVector(right, fc.side); look.y += cfg[1];
   camera.lookAt(look);
-  camera.quaternion.multiply(tiltQ);
+  if (FOLLOW[camMode]) camera.quaternion.multiply(tiltQ);
 }
 
 // ---------- HUD ----------
@@ -839,6 +849,29 @@ function drawAttitude(a) {
   actx.beginPath(); actx.moveTo(R - 70, R); actx.lineTo(R - 25, R); actx.lineTo(R - 12, R + 14); actx.moveTo(R + 70, R); actx.lineTo(R + 25, R); actx.lineTo(R + 12, R + 14); actx.stroke();
   actx.beginPath(); actx.arc(R, R, 5, 0, Math.PI * 2); actx.fillStyle = '#ffb020'; actx.fill();
 }
+// mouse "stick" tester: dot shows current mouse speed/direction and springs back to centre
+const mpad = $('mpad'), mctx = mpad.getContext('2d');
+let padVX = 0, padVY = 0, padLast = performance.now();
+const padTrail = [];
+function drawMousePad() {
+  const now = performance.now(), dt = Math.max(1e-3, (now - padLast) / 1000); padLast = now;
+  const k = Math.min(1, dt * 14);
+  padVX += (padAX / dt - padVX) * k; padVY += (padAY / dt - padVY) * k;
+  padAX = padAY = 0;
+  const S = mpad.width, C = S / 2, R = C - 12;
+  const scale = 600 / Math.max(0.05, opts.sens);       // px/s that maps to full deflection
+  const mag = Math.hypot(padVX, padVY), n = Math.tanh(mag / scale) * R;
+  const x = C + (mag ? padVX / mag * n : 0), y = C + (mag ? padVY / mag * n : 0);
+  padTrail.push([x, y]); if (padTrail.length > 10) padTrail.shift();
+  mctx.clearRect(0, 0, S, S);
+  mctx.strokeStyle = 'rgba(255,255,255,.18)'; mctx.lineWidth = 2;
+  mctx.strokeRect(6, 6, S - 12, S - 12);
+  mctx.beginPath(); mctx.moveTo(C, 6); mctx.lineTo(C, S - 6); mctx.moveTo(6, C); mctx.lineTo(S - 6, C); mctx.stroke();
+  mctx.beginPath(); mctx.arc(C, C, R * 0.5, 0, Math.PI * 2); mctx.stroke();
+  padTrail.forEach(([tx, ty], i) => { mctx.fillStyle = `rgba(224,102,44,${(i + 1) / padTrail.length * 0.35})`; mctx.beginPath(); mctx.arc(tx, ty, 5, 0, Math.PI * 2); mctx.fill(); });
+  mctx.strokeStyle = '#e0662c'; mctx.lineWidth = 3; mctx.beginPath(); mctx.moveTo(C, C); mctx.lineTo(x, y); mctx.stroke();
+  mctx.fillStyle = '#ff8a4a'; mctx.beginPath(); mctx.arc(x, y, 9, 0, Math.PI * 2); mctx.fill();
+}
 function updateHUD() {
   const a = attitude();
   const agl = state.pos.y - groundAt(state.pos.x, state.pos.z, 1).h;
@@ -852,16 +885,29 @@ function updateHUD() {
   $('sThr').textContent = Math.round(state.throttle * 100) + '%';
   $('thrfill').style.width = (state.throttle * 100) + '%';
   for (const k of ['W', 'A', 'S', 'D']) $('k' + k).classList.toggle('on', !!keys['Key' + k]);
+  drawMousePad();
   drawAttitude(a);
 }
 
 // ---------- menu / loop ----------
+function silence() {
+  // cut the sound immediately (not a fade) and stop the audio clock
+  if (!audio) return;
+  audio.master.gain.cancelScheduledValues(audio.ctx.currentTime);
+  audio.master.gain.setValueAtTime(0, audio.ctx.currentTime);
+  audio.ctx.suspend();
+}
 function pause() {
   running = false; $('menu').style.display = 'flex'; $('start').textContent = '再開 (クリック)';
+  for (const k in keys) keys[k] = false;
+  silence();
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
 }
+document.addEventListener('visibilitychange', () => { if (document.hidden) { if (running) pause(); else silence(); } });
 let lastMode = null;
 $('start').onclick = () => {
   if (opts.sound) initAudio();
+  if (audio && opts.sound) audio.ctx.resume();
   $('menu').style.display = 'none';
   running = true;
   if (lastMode !== mode) { lastMode = mode; respawn(); }
