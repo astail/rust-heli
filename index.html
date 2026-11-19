@@ -96,7 +96,7 @@
       <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す + 旋回方向へ傾く)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
-      <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
+      <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (機内 / コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
       <tr><td><kbd>R</kbd></td><td>リスポーン</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>一時停止 / メニュー</td></tr>
     </table>
@@ -112,7 +112,7 @@
       </label>
       <label>デフォルト視点
         <select id="optCam">
-          <option value="2">コックピット</option><option value="4">近接 (コックピット寄り)</option>
+          <option value="5">機内 (パイロット後方)</option><option value="2">コックピット</option><option value="4">近接 (コックピット寄り)</option>
           <option value="0">TPS (近め)</option><option value="1">チェイス (遠め)</option><option value="3">俯瞰</option>
         </select>
       </label>
@@ -138,11 +138,11 @@ const store = {
   set(k, v) { try { localStorage.setItem('rhtr_' + k, JSON.stringify(v)); } catch {} }
 };
 const opts = { sens: store.get('sens', 1), invert: store.get('invert', false), assist: store.get('assist', false),
-  ceil: store.get('ceil', 150), cam: store.get('cam', 0) };
+  ceil: store.get('ceil', 150), cam: store.get('cam2', 5) };
 $('optSens').value = opts.sens; $('optSensV').textContent = (+opts.sens).toFixed(2);
 $('optCeil').value = opts.ceil; $('optCam').value = opts.cam;
 $('optCeil').onchange = e => { opts.ceil = +e.target.value; store.set('ceil', opts.ceil); };
-$('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam', opts.cam); camMode = opts.cam; };
+$('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam2', opts.cam); camMode = opts.cam; };
 $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
@@ -285,15 +285,16 @@ for (const L of landingDefs) {
 
 // ---------- helicopter model ----------
 const heli = new THREE.Group();
+let hull, canopy, mast;
 {
   const body = new THREE.MeshLambertMaterial({ color: 0x5c6b4e }), dark = new THREE.MeshLambertMaterial({ color: 0x2b2f33 });
   const glass = new THREE.MeshLambertMaterial({ color: 0x9fc4d8, transparent: true, opacity: 0.55 });
   const add = (g, mat, x, y, z) => { const o = new THREE.Mesh(g, mat); o.position.set(x, y, z); o.castShadow = true; heli.add(o); return o; };
-  add(new THREE.BoxGeometry(1.4, 1.1, 2.2), body, 0, 0.95, 0);
-  add(new THREE.SphereGeometry(0.75, 12, 10), glass, 0, 1.05, -1.05).scale.set(0.95, 0.85, 0.8);
+  hull = add(new THREE.BoxGeometry(1.4, 1.1, 2.2), body, 0, 0.95, 0);
+  canopy = add(new THREE.SphereGeometry(0.75, 12, 10), glass, 0, 1.05, -1.05); canopy.scale.set(0.95, 0.85, 0.8);
   add(new THREE.BoxGeometry(0.25, 0.25, 3.2), body, 0, 1.15, 2.6);
   add(new THREE.BoxGeometry(0.08, 0.8, 0.5), body, 0, 1.45, 4.1);
-  add(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 6), dark, 0, 1.75, 0);
+  mast = add(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 6), dark, 0, 1.75, 0);
   for (const sx of [-0.75, 0.75]) add(new THREE.BoxGeometry(0.08, 0.08, 2.8), dark, sx, 0.08, 0);
   for (const sz of [-0.7, 0.7]) for (const sx of [-0.55, 0.55]) add(new THREE.BoxGeometry(0.06, 0.45, 0.06), dark, sx, 0.3, sz);
 }
@@ -304,6 +305,54 @@ for (let i = 0; i < 2; i++) {
 }
 const tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.1, 0.12), new THREE.MeshLambertMaterial({ color: 0x222222 }));
 tailRotor.position.set(0.12, 1.45, 4.2); heli.add(tailRotor);
+// cabin interior (shown only in the in-cabin view)
+const cabin = new THREE.Group(); cabin.visible = false; heli.add(cabin);
+{
+  const lam = c => new THREE.MeshLambertMaterial({ color: c });
+  const body = lam(0x5c6b4e), dark = lam(0x24282c), metal = lam(0x3a3f45), suit = lam(0x4a5a3a), seatM = lam(0x6b4f35);
+  const box = (w, h, d, m, x, y, z) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); cabin.add(o); return o; };
+  const bar = (m, a, b, r = 0.035) => {
+    const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), len = A.distanceTo(B);
+    const o = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 6), m);
+    o.position.copy(A).add(B).multiplyScalar(0.5);
+    o.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+    cabin.add(o); return o;
+  };
+  box(1.4, 0.06, 2.3, metal, 0, 0.42, 0);                 // floor
+  box(0.05, 0.45, 2.0, body, -0.7, 0.66, 0.05);           // door sills
+  box(0.05, 0.45, 2.0, body, 0.7, 0.66, 0.05);
+  box(1.4, 0.06, 0.25, body, 0, 0.9, -1.15);              // nose lip
+  box(1.4, 0.8, 0.06, body, 0, 0.82, 1.15);               // rear wall
+  box(1.2, 0.05, 0.62, body, 0, 1.8, -0.11);              // roof (front)
+  const dash = box(1.15, 0.28, 0.3, dark, 0, 0.98, -0.85); dash.rotation.x = -0.35;
+  for (const [gx, gy] of [[-0.32, 1.03], [-0.1, 1.05], [0.12, 1.05], [0.34, 1.03], [0.01, 0.92]]) {
+    const g = new THREE.Mesh(new THREE.CircleGeometry(0.075, 18), new THREE.MeshBasicMaterial({ color: 0xd9dde0 }));
+    g.position.set(gx, gy + 0.03, -0.69); g.rotation.x = -0.35; cabin.add(g);
+    const n = new THREE.Mesh(new THREE.PlaneGeometry(0.008, 0.06), new THREE.MeshBasicMaterial({ color: 0xd04020 }));
+    n.position.set(gx, gy + 0.045, -0.685); n.rotation.set(-0.35, 0, gx * 4); cabin.add(n);
+  }
+  // canopy frame
+  for (const sx of [-1, 1]) {
+    bar(dark, [sx * 0.66, 0.9, -1.15], [sx * 0.6, 1.8, -0.42]);   // A-pillar
+    bar(dark, [sx * 0.68, 0.9, 0.45], [sx * 0.6, 1.8, 0.45]);     // door post
+  }
+  bar(dark, [-0.6, 1.8, -0.42], [0.6, 1.8, -0.42]);
+  bar(dark, [0, 0.95, -1.15], [0, 1.8, -0.42], 0.025);            // center strut
+  const glassM = new THREE.MeshBasicMaterial({ color: 0xbfe0f0, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false });
+  const ws = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.15), glassM);
+  ws.position.set(0, 1.35, -0.8); ws.rotation.x = -0.9; cabin.add(ws);
+  // seat + pilot
+  box(0.55, 0.12, 0.5, seatM, 0, 0.72, 0.35);
+  box(0.55, 0.7, 0.1, seatM, 0, 1.05, 0.62);
+  box(0.46, 0.55, 0.28, suit, 0, 1.08, 0.42);              // torso
+  box(0.16, 0.12, 0.5, suit, -0.17, 0.82, 0.15);           // thighs
+  box(0.16, 0.12, 0.5, suit, 0.17, 0.82, 0.15);
+  bar(suit, [-0.25, 1.28, 0.42], [-0.12, 0.92, 0.0], 0.06);  // arms to stick
+  bar(suit, [0.25, 1.28, 0.42], [0.06, 0.92, 0.0], 0.06);
+  bar(dark, [0, 0.45, -0.05], [-0.03, 0.92, 0.0], 0.02);     // cyclic
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 10), lam(0x2e3a2a));
+  helmet.position.set(0, 1.5, 0.4); cabin.add(helmet);
+}
 scene.add(heli);
 
 // ---------- rings ----------
@@ -359,8 +408,8 @@ const state = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(),
   angVel: new THREE.Vector3(), throttle: 0, rotorSpin: 0, crashed: false, grounded: true
 };
-const CAMS = ['TPS', 'チェイス', 'コックピット', '俯瞰', '近接'];
-const CAM_ORDER = [2, 4, 0, 1, 3]; // cockpit -> close -> TPS -> chase -> overhead
+const CAMS = ['TPS', 'チェイス', 'コックピット', '俯瞰', '近接', '機内'];
+const CAM_ORDER = [5, 2, 4, 0, 1, 3]; // cabin -> cockpit -> close -> TPS -> chase -> overhead
 let running = false, camMode = opts.cam, crashTimer = 0;
 const spawn = { pos: new THREE.Vector3(0, HOME.top, 4), yaw: 0 };
 
@@ -613,7 +662,7 @@ function toast(html, color = 'var(--fg)', ms = 1800) {
 }
 
 // ---------- camera ----------
-const camPos = new THREE.Vector3(0, 8, 14);
+const camPos = new THREE.Vector3(0, 8, 14), camQ = new THREE.Quaternion();
 function updateCamera(dt) {
   if (camMode === 2 && !state.crashed) {
     const p = new THREE.Vector3(0, 1.35, -0.6).applyQuaternion(state.q).add(state.pos);
@@ -622,6 +671,19 @@ function updateCamera(dt) {
     return;
   }
   if (!state.crashed) heli.visible = true;
+  const inCabin = camMode === 5 && !state.crashed;
+  cabin.visible = inCabin; hull.visible = canopy.visible = mast.visible = !inCabin;
+  if (inCabin) {
+    rotor.children.forEach(b => { b.material.transparent = true; b.material.opacity = 0.15; });
+    camera.position.copy(new THREE.Vector3(0.34, 2.0, 1.45).applyQuaternion(state.q).add(state.pos));
+    // head lags the airframe slightly
+    const tq = state.q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.2));
+    camQ.slerp(tq, 1 - Math.exp(-dt * 9));
+    camera.quaternion.copy(camQ);
+    camPos.copy(camera.position);
+    return;
+  }
+  camQ.copy(state.q);
   const bladeOp = camMode === 4 ? 0.22 : 1;
   rotor.children.forEach(b => { b.material.transparent = bladeOp < 1; b.material.opacity = bladeOp; });
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
