@@ -155,6 +155,8 @@
           <option value="150">150 m</option><option value="250">250 m</option>
         </select>
       </label>
+      <label>回転軸の位置 <input type="range" id="optPivot" min="-0.4" max="2.5" step="0.1"><span id="optPivotV"></span></label>
+      <small style="color:var(--muted);margin-top:-6px">パイロットから何 m 後ろを中心に機体が回るか。大きいほど A/D で前の席が大きく振られる (-0.4 m が以前の挙動)</small>
       <fieldset class="camfs">
         <legend>デフォルト視点とカメラ位置
           <select id="optCam">
@@ -214,6 +216,7 @@ const opts = { sens: store.get('sens2', 0.5), invert: store.get('invert', false)
 if (opts.cam === 2) opts.cam = 6; // cockpit is no longer selectable as default
 $('optSens').value = opts.sens; $('optSensV').textContent = (+opts.sens).toFixed(2);
 $('optCeil').value = opts.ceil; $('optCam').value = opts.cam;
+opts.pivot = store.get('pivot', 1.0);
 $('optCeil').onchange = e => { opts.ceil = +e.target.value; store.set('ceil', opts.ceil); };
 $('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam3', opts.cam); camMode = opts.cam; camEdit = opts.cam; syncCamUI(); };
 $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
@@ -452,18 +455,23 @@ for (const L of landingDefs) {
 
 // ---------- helicopter model ----------
 const heli = new THREE.Group();
-let hull, canopy, mast;
+// the rotor mast is the rotation axis; the cockpit pod (hull, canopy, seat, instruments) sits ahead of it
+// like Rust's Minicopter, so yawing swings the pilot around instead of spinning on the spot
+const front = new THREE.Group(); heli.add(front);
+let hull, canopy, mast, engine;
+const skidRails = [], skidStruts = [];
 {
   const body = new THREE.MeshLambertMaterial({ color: 0x5c6b4e }), dark = new THREE.MeshLambertMaterial({ color: 0x2b2f33 });
   const glass = new THREE.MeshLambertMaterial({ color: 0x9fc4d8, transparent: true, opacity: 0.55 });
-  const add = (g, mat, x, y, z) => { const o = new THREE.Mesh(g, mat); o.position.set(x, y, z); o.castShadow = true; heli.add(o); return o; };
-  hull = add(new THREE.BoxGeometry(1.4, 1.1, 2.2), body, 0, 0.95, 0);
-  canopy = add(new THREE.SphereGeometry(0.75, 12, 10), glass, 0, 1.05, -1.05); canopy.scale.set(0.95, 0.85, 0.8);
+  const add = (g, mat, x, y, z, parent = heli) => { const o = new THREE.Mesh(g, mat); o.position.set(x, y, z); o.castShadow = true; parent.add(o); return o; };
+  hull = add(new THREE.BoxGeometry(1.4, 1.1, 2.2), body, 0, 0.95, 0, front);
+  canopy = add(new THREE.SphereGeometry(0.75, 12, 10), glass, 0, 1.05, -1.05, front); canopy.scale.set(0.95, 0.85, 0.8);
+  engine = add(new THREE.BoxGeometry(0.9, 0.8, 1), body, 0, 1.1, 0);   // engine bay under the mast, stretched by applyPivot()
   add(new THREE.BoxGeometry(0.25, 0.25, 3.2), body, 0, 1.15, 2.6);
   add(new THREE.BoxGeometry(0.08, 0.8, 0.5), body, 0, 1.45, 4.1);
   mast = add(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 6), dark, 0, 1.75, 0);
-  for (const sx of [-0.75, 0.75]) add(new THREE.BoxGeometry(0.08, 0.08, 2.8), dark, sx, 0.08, 0);
-  for (const sz of [-0.7, 0.7]) for (const sx of [-0.55, 0.55]) add(new THREE.BoxGeometry(0.06, 0.45, 0.06), dark, sx, 0.3, sz);
+  for (const sx of [-0.75, 0.75]) skidRails.push(add(new THREE.BoxGeometry(0.08, 0.08, 1), dark, sx, 0.08, 0));
+  for (let i = 0; i < 2; i++) for (const sx of [-0.55, 0.55]) skidStruts.push(add(new THREE.BoxGeometry(0.06, 0.45, 0.06), dark, sx, 0.3, 0));
 }
 const rotor = new THREE.Group(); rotor.position.set(0, 2.05, 0); heli.add(rotor);
 for (let i = 0; i < 2; i++) {
@@ -475,7 +483,7 @@ tailRotor.position.set(0.12, 1.45, 4.2); heli.add(tailRotor);
 // cabin interior (shown only in the in-cabin view)
 let torso, pilotHead, dashM, dashBox;
 const gaugeNeedles = [];
-const cabin = new THREE.Group(); cabin.visible = false; heli.add(cabin);
+const cabin = new THREE.Group(); cabin.visible = false; front.add(cabin);
 {
   const lam = c => new THREE.MeshLambertMaterial({ color: c });
   const body = lam(0x5c6b4e), dark = lam(0x24282c), metal = lam(0x3a3f45), suit = lam(0x4a5a3a), seatM = lam(0x6b4f35);
@@ -560,6 +568,19 @@ const cabin = new THREE.Group(); cabin.visible = false; heli.add(cabin);
   helmet.position.set(0, 1.5, 0.4); cabin.add(helmet); pilotHead = helmet;
 }
 scene.add(heli);
+// opts.pivot = how far behind the pilot's head the rotation axis (mast) is
+function applyPivot() {
+  front.position.z = -(opts.pivot + 0.4);                 // the pilot's head is at z = 0.4 inside the pod
+  const podFront = front.position.z - 1.1, podRear = front.position.z + 1.1;
+  const eF = Math.min(podRear - 0.2, -0.5), eR = 1.0;      // engine bay bridges the pod and the tail boom
+  engine.scale.z = eR - eF; engine.position.z = (eF + eR) / 2;
+  const sF = Math.min(podFront + 0.4, -1.4), sR = 1.4;     // skids reach under the pod
+  skidRails.forEach(r => { r.scale.z = sR - sF; r.position.z = (sF + sR) / 2; });
+  skidStruts.forEach((o, i) => { o.position.z = i < 2 ? sF + 0.7 : sR - 0.7; });
+  $('optPivot').value = opts.pivot; $('optPivotV').textContent = opts.pivot.toFixed(1) + ' m';
+}
+$('optPivot').oninput = e => { opts.pivot = +e.target.value; store.set('pivot', opts.pivot); applyPivot(); };
+applyPivot();
 
 // ---------- rings ----------
 const ringGroup = new THREE.Group(); scene.add(ringGroup);
@@ -897,20 +918,20 @@ function updateCamera(dt) {
   const cc = camCfg[camMode];
   const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -cc.tilt / 57.3);
   if (camMode === 2 && !state.crashed) {
-    const p = new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(visQ).add(state.pos);
+    const p = new THREE.Vector3(cc.side, cc.height, cc.dist + front.position.z).applyQuaternion(visQ).add(state.pos);
     camera.position.copy(p); camera.quaternion.copy(visQ).multiply(tiltQ);
     // hide the airframe only while the eye is inside the fuselage
     const inside = Math.abs(cc.side) < 0.75 && cc.dist > -1.3 && cc.dist < 1.2 && cc.height > 0.3 && cc.height < 1.6;
-    heli.visible = !inside; cabin.visible = false; hull.visible = canopy.visible = mast.visible = true;
+    heli.visible = !inside; cabin.visible = false; hull.visible = canopy.visible = mast.visible = engine.visible = true;
     return;
   }
   if (!state.crashed) heli.visible = true;
   const inCabin = (camMode === 5 || camMode === 6) && !state.crashed;
-  cabin.visible = inCabin; hull.visible = canopy.visible = mast.visible = !inCabin;
+  cabin.visible = inCabin; hull.visible = canopy.visible = mast.visible = engine.visible = !inCabin;
   torso.visible = pilotHead.visible = camMode !== 6;   // pilot view: you are the pilot
   if (inCabin) {
     rotor.children.forEach(b => { b.material.transparent = true; b.material.opacity = 0.15; });
-    camera.position.copy(new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(visQ).add(state.pos));
+    camera.position.copy(new THREE.Vector3(cc.side, cc.height, cc.dist + front.position.z).applyQuaternion(visQ).add(state.pos));
     // head lags the airframe slightly
     const tq = visQ.clone().multiply(tiltQ);
     camQ.slerp(tq, 1 - Math.exp(-dt * 9));
