@@ -71,6 +71,9 @@
   .camfs select { font-size: 12px; padding: 1px 4px; margin-left: 6px; }
   .cl { width: 92px; color: var(--muted); }
   .cv { width: 64px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+  .opts label.chk { flex-wrap: nowrap; align-items: flex-start; }
+  .opts label.chk input { margin-top: 2px; flex: none; }
+  .opts label.chk small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
   .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
   /* on wide screens the controls list floats on the right so settings fit in the left panel at a glance */
   @media (min-width: 900px) {
@@ -171,9 +174,9 @@
         <label><span class="cl">計器盤の箱</span><input type="range" id="optDash" min="0" max="1" step="0.05"><span class="cv" id="optDashV"></span></label>
         <small style="color:var(--muted)">計器盤の箱: 0% で透明 (メーターだけ残る)。距離・高さはマイナスも可 (前方 / 機体の下)。飛行中はマウスホイールで今の視点の距離を調整できます</small>
       </fieldset>
-      <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
-      <label><input type="checkbox" id="optFs"> スタート時に全画面 (Chrome / Edge では Ctrl+W でタブが閉じなくなる)</label>
-      <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
+      <label class="chk"><input type="checkbox" id="optInvert"><span>マウス上下反転<small>Rust の input.vehicle_flipy 相当</small></span></label>
+      <label class="chk"><input type="checkbox" id="optFs"><span>スタート時に全画面<small>Chrome / Edge では Ctrl+W でタブが閉じなくなる</small></span></label>
+      <label class="chk"><input type="checkbox" id="optAssist"><span>自動水平アシスト<small>初心者向け (Rust 本家には無い)</small></span></label>
       <label><input type="checkbox" id="optSound"> ローター音を出す
         <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.25"></span></label>
     </div>
@@ -223,7 +226,8 @@ $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens2', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 opts.fs = store.get('fs', true); $('optFs').checked = opts.fs;
-$('optFs').onchange = e => { opts.fs = e.target.checked; store.set('fs', opts.fs); };
+const leaveFullscreen = () => { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); };
+$('optFs').onchange = e => { opts.fs = e.target.checked; store.set('fs', opts.fs); if (!opts.fs) leaveFullscreen(); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
 // per-view camera offsets  (0 TPS, 1 chase, 2 cockpit, 3 overhead, 4 close, 5 cabin, 6 pilot)
 const CAM_DEF = {
@@ -1148,6 +1152,7 @@ function pause() {
   for (const k in keys) keys[k] = false;
   silence();
   if (document.pointerLockElement === canvas) document.exitPointerLock();
+  leaveFullscreen(); // the menu is never left stuck in fullscreen
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { if (running) pause(); else silence(); } });
 let lastMode = null;
