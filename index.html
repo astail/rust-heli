@@ -164,7 +164,8 @@
         <label><span class="cl">高さ</span><input type="range" id="cHeight"><span class="cv" id="cHeightV"></span></label>
         <label><span class="cl">左右</span><input type="range" id="cSide"><span class="cv" id="cSideV"></span></label>
         <label><span class="cl">下向き角度</span><input type="range" id="cTilt" min="-45" max="60" step="1"><span class="cv" id="cTiltV"></span></label>
-        <small style="color:var(--muted)">距離・高さはマイナスも可 (前方 / 機体の下)。飛行中はマウスホイールで今の視点の距離を調整できます</small>
+        <label><span class="cl">計器盤の箱</span><input type="range" id="optDash" min="0" max="1" step="0.05"><span class="cv" id="optDashV"></span></label>
+        <small style="color:var(--muted)">計器盤の箱: 0% で透明 (メーターだけ残る)。距離・高さはマイナスも可 (前方 / 機体の下)。飛行中はマウスホイールで今の視点の距離を調整できます</small>
       </fieldset>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
@@ -464,7 +465,7 @@ for (let i = 0; i < 2; i++) {
 const tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.1, 0.12), new THREE.MeshLambertMaterial({ color: 0x222222 }));
 tailRotor.position.set(0.12, 1.45, 4.2); heli.add(tailRotor);
 // cabin interior (shown only in the in-cabin view)
-let torso, pilotHead;
+let torso, pilotHead, dashM, dashBox;
 const gaugeNeedles = [];
 const cabin = new THREE.Group(); cabin.visible = false; heli.add(cabin);
 {
@@ -484,7 +485,8 @@ const cabin = new THREE.Group(); cabin.visible = false; heli.add(cabin);
   box(1.4, 0.06, 0.25, body, 0, 0.9, -1.15);              // nose lip
   box(1.4, 0.8, 0.06, body, 0, 0.82, 1.15);               // rear wall
   box(1.2, 0.05, 0.62, body, 0, 1.8, -0.11);              // roof (front)
-  const dash = box(1.15, 0.28, 0.3, dark, 0, 0.98, -0.85); dash.rotation.x = -0.35;
+  dashM = new THREE.MeshLambertMaterial({ color: 0x24282c, transparent: true });
+  dashBox = box(1.15, 0.28, 0.3, dashM, 0, 0.98, -0.85); dashBox.rotation.x = -0.35;
   // live instruments: [label, sweep start°, sweep end°, major ticks, tick labels]
   const GAUGES = [
     ['SPD km/h', -135, 135, 11, ['0', '', '40', '', '80', '', '120', '', '160', '', '200']],
@@ -1031,6 +1033,15 @@ function drawMousePad() {
   mctx.strokeStyle = '#e0662c'; mctx.lineWidth = 3; mctx.beginPath(); mctx.moveTo(C, C); mctx.lineTo(x, y); mctx.stroke();
   mctx.fillStyle = '#ff8a4a'; mctx.beginPath(); mctx.arc(x, y, 9, 0, Math.PI * 2); mctx.fill();
 }
+// instrument-panel box opacity (0 = invisible, dials stay)
+opts.dash = store.get('dashop', 1);
+function applyDash() {
+  dashM.opacity = opts.dash; dashM.depthWrite = opts.dash >= 1; dashBox.visible = opts.dash > 0;
+  $('optDash').value = opts.dash; $('optDashV').textContent = Math.round(opts.dash * 100) + '%';
+}
+$('optDash').oninput = e => { opts.dash = +e.target.value; store.set('dashop', opts.dash); applyDash(); };
+applyDash();
+
 function updateGauges(dt) {
   if (!cabin.visible) return;
   const fwd = _v.set(0, 0, -1).applyQuaternion(state.q);
