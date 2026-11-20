@@ -136,7 +136,7 @@
       <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
       <tr><td><kbd>S</kbd></td><td>スロットル下降 (降下)</td></tr>
       <tr><td><kbd>Ctrl</kbd></td><td>押している間は揚力が抜ける (Ctrl+W でも飛ばない / 空中なら落ちる)</td></tr>
-      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す + 旋回方向へ傾く。傾きは自動で戻らないのでマウスで直す)</td></tr>
+      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (その場でホバリングしたまま機首を左右に回す)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
       <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (パイロット / 機内 / コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
@@ -702,12 +702,7 @@ function stepPhysics(dt) {
   state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
   const yawTarget = yawIn * 0.6 * (state.grounded ? 0.0 : 1);
   state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.45);
-  // A/D also rolls the airframe into the turn; it does NOT level itself afterwards
-  // (like Rust, you have to correct the bank with the mouse)
-  if (!state.grounded && yawIn) {
-    _q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), yawIn * 0.2 * dt);
-    state.q.multiply(_q);
-  }
+  // A/D is pure yaw: the heli spins on the spot while hovering, no bank or drift
   // light turbulence
   if (!state.grounded) {
     turbT += dt;
