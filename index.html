@@ -680,7 +680,7 @@ function stepPhysics(dt) {
   if (state.crashed) { state.vel.set(0, 0, 0); return; }
   // --- throttle (W/S) like Rust: hold W climb, S descend, none = slow sink ---
   const up = keys.KeyW ? 1 : 0, down = keys.KeyS ? 1 : 0;
-  let target = up && !down ? 1 : down && !up ? 0 : 0.5;
+  let target = up && !down ? 1 : down && !up ? 0 : 0.3; // released W settles at 30%
   if (state.grounded && !up) target = down ? 0 : 0.0;
   // Rust: holding Ctrl kills lift (Ctrl+W does not take off, in the air it drops)
   const cut = ctrlHeld();
