@@ -136,7 +136,7 @@
       <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
       <tr><td><kbd>S</kbd></td><td>スロットル下降 (降下)</td></tr>
       <tr><td><kbd>Ctrl</kbd></td><td>押している間は揚力が抜ける (Ctrl+W でも飛ばない / 空中なら落ちる)</td></tr>
-      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (その場でホバリングしたまま機首を左右に回す)</td></tr>
+      <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (その場で機首を左右に回す + 旋回方向へ傾く。傾きは自動で戻らないのでマウスで直す)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
       <tr><td><kbd>C</kbd> / <kbd>V</kbd></td><td>視点切替 (パイロット / 機内 / コックピット / 近接 / TPS / チェイス / 俯瞰)</td></tr>
@@ -641,13 +641,17 @@ function groundAt(x, z, footprint = 1.2) {
   return { h, solid };
 }
 
+// bank = lean from A/D. It is shown on the airframe, camera and attitude indicator and does not
+// level itself (correct it with the mouse), but it does not tilt the thrust, so yawing spins on the spot
 const ctrl = new THREE.Vector3(); let turbT = 0, bank = 0;
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
-function attitude() {
+const visQ = new THREE.Quaternion(), _lq = new THREE.Quaternion(), _zAxis = new THREE.Vector3(0, 0, 1);
+function updVisQ() { return visQ.copy(state.q).multiply(_lq.setFromAxisAngle(_zAxis, bank)); }
+function attitude(q = state.q) {
   // pitch / roll relative to horizon, in degrees
-  const fwd = _v.set(0, 0, -1).applyQuaternion(state.q);
+  const fwd = _v.set(0, 0, -1).applyQuaternion(q);
   const pitch = Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1));
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(state.q);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
   const roll = Math.asin(THREE.MathUtils.clamp(-right.y, -1, 1));
   return { pitch: pitch * 57.3, roll: roll * 57.3 };
 }
@@ -702,7 +706,9 @@ function stepPhysics(dt) {
   state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
   const yawTarget = yawIn * 0.6 * (state.grounded ? 0.0 : 1);
   state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.45);
-  // A/D is pure yaw: the heli spins on the spot while hovering, no bank or drift
+  // A/D leans the airframe into the turn (max ~20°) without levelling itself
+  if (!state.grounded && yawIn) bank = THREE.MathUtils.clamp(bank + yawIn * 0.2 * dt, -0.35, 0.35);
+  if (opts.assist) bank *= Math.exp(-dt * 2);
   // light turbulence
   if (!state.grounded) {
     turbT += dt;
@@ -718,7 +724,13 @@ function stepPhysics(dt) {
   }
 
   // apply local rotation (pitch about x, roll about z), yaw about world up
-  _q.setFromEuler(_e.set(state.angVel.x * dt, 0, state.angVel.z * dt));
+  // mouse roll against the lean straightens the lean first; only the rest rolls the real attitude
+  let rollStep = state.angVel.z * dt;
+  if (bank && rollStep && Math.sign(rollStep) !== Math.sign(bank)) {
+    const nb = bank + rollStep;
+    if (Math.sign(nb) === Math.sign(bank)) { bank = nb; rollStep = 0; } else { rollStep = nb; bank = 0; }
+  }
+  _q.setFromEuler(_e.set(state.angVel.x * dt, 0, rollStep));
   state.q.multiply(_q);
   _q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), state.angVel.y * dt);
   state.q.premultiply(_q).normalize();
@@ -875,11 +887,12 @@ function toast(html, color = 'var(--fg)', ms = 1800) {
 // ---------- camera ----------
 const camPos = new THREE.Vector3(0, 8, 14), camQ = new THREE.Quaternion();
 function updateCamera(dt) {
+  updVisQ();
   const cc = camCfg[camMode];
   const tiltQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -cc.tilt / 57.3);
   if (camMode === 2 && !state.crashed) {
-    const p = new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(state.q).add(state.pos);
-    camera.position.copy(p); camera.quaternion.copy(state.q).multiply(tiltQ);
+    const p = new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(visQ).add(state.pos);
+    camera.position.copy(p); camera.quaternion.copy(visQ).multiply(tiltQ);
     // hide the airframe only while the eye is inside the fuselage
     const inside = Math.abs(cc.side) < 0.75 && cc.dist > -1.3 && cc.dist < 1.2 && cc.height > 0.3 && cc.height < 1.6;
     heli.visible = !inside; cabin.visible = false; hull.visible = canopy.visible = mast.visible = true;
@@ -891,15 +904,15 @@ function updateCamera(dt) {
   torso.visible = pilotHead.visible = camMode !== 6;   // pilot view: you are the pilot
   if (inCabin) {
     rotor.children.forEach(b => { b.material.transparent = true; b.material.opacity = 0.15; });
-    camera.position.copy(new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(state.q).add(state.pos));
+    camera.position.copy(new THREE.Vector3(cc.side, cc.height, cc.dist).applyQuaternion(visQ).add(state.pos));
     // head lags the airframe slightly
-    const tq = state.q.clone().multiply(tiltQ);
+    const tq = visQ.clone().multiply(tiltQ);
     camQ.slerp(tq, 1 - Math.exp(-dt * 9));
     camera.quaternion.copy(camQ);
     camPos.copy(camera.position);
     return;
   }
-  camQ.copy(state.q);
+  camQ.copy(visQ);
   const bladeOp = camMode === 4 ? 0.22 : 1;
   rotor.children.forEach(b => { b.material.transparent = bladeOp < 1; b.material.opacity = bladeOp; });
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fwd.y = 0;
@@ -1078,7 +1091,7 @@ function updateGauges(dt) {
   });
 }
 function updateHUD() {
-  const a = attitude();
+  const a = attitude(updVisQ());
   const agl = state.pos.y - groundAt(state.pos.x, state.pos.z, 1).h;
   $('sAlt').textContent = agl.toFixed(1) + ' m';
   $('sSpd').textContent = (state.vel.length() * 3.6).toFixed(0) + ' km/h';
@@ -1145,7 +1158,7 @@ function frame(now) {
     const d = debris[i]; d.v.y -= G * dt; d.m.position.addScaledVector(d.v, dt); d.m.rotation.x += dt * 5; d.t -= dt;
     if (d.t <= 0) { scene.remove(d.m); debris.splice(i, 1); }
   }
-  heli.position.copy(state.pos); heli.quaternion.copy(state.q);
+  heli.position.copy(state.pos); heli.quaternion.copy(updVisQ());
   rotor.rotation.y += dt * 40 * state.rotorSpin * (0.3 + state.throttle);
   tailRotor.rotation.x += dt * 60 * state.rotorSpin;
   marker.rotation.y += dt * 2;
