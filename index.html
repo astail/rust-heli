@@ -72,6 +72,12 @@
   .cl { width: 92px; color: var(--muted); }
   .cv { width: 64px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
   .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  /* on wide screens the controls list floats on the right so settings fit in the left panel at a glance */
+  @media (min-width: 900px) {
+    #ctlPanel { position: fixed; right: 16px; top: 50%; transform: translateY(-50%); width: 360px; max-height: calc(100vh - 32px); overflow-y: auto; font-size: 13px;
+      background: rgba(22,26,33,.94); border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+    #ctlPanel table.ctl td:first-child { width: 32%; }
+  }
   /* start button stays pinned to the bottom of the menu so it is visible without scrolling */
   .startbar { position: sticky; bottom: -20px; margin: 16px -20px -20px; padding: 12px 20px 16px; background: rgba(22,26,33,.98); border-top: 1px solid var(--line); box-shadow: 0 -8px 16px rgba(0,0,0,.35); }
   .startbar small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; text-align: center; }
@@ -123,6 +129,7 @@
       <button class="mode" data-mode="hover"><b>ホバリング</b><small>エリア内で高度を保って20秒静止</small><span class="best" id="bestHover"></span></button>
     </div>
 
+    <section id="ctlPanel">
     <h2>操作 (Rust のデフォルト準拠)</h2>
     <table class="ctl">
       <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
@@ -135,6 +142,7 @@
       <tr><td><kbd>H</kbd></td><td>HUD 表示 ON/OFF</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>一時停止 / メニュー</td></tr>
     </table>
+    </section>
 
     <h2>設定</h2>
     <div class="opts">
