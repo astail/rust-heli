@@ -2,7 +2,7 @@
 
 ゲーム「Rust」の Minicopter 風ヘリコプター操作をブラウザで練習できる非公式シミュレーターです。
 
-**▶ プレイ:** https://astail.github.io/rust-heri/
+**▶ プレイ:** https://astail.github.io/rust-heli/
 
 ## 操作
 | キー | 動作 |
