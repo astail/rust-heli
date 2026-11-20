@@ -97,6 +97,7 @@
   <div class="kgrid">
     <div></div><div class="k" id="kW">W</div><div></div>
     <div class="k" id="kA">A</div><div class="k" id="kS">S</div><div class="k" id="kD">D</div>
+    <div class="k" id="kCtrl" style="grid-column: 1 / 4">Ctrl</div>
   </div>
   <div class="mwrap"><canvas id="mpad" width="140" height="140"></canvas><span>MOUSE</span></div>
 </div>
@@ -134,6 +135,7 @@
     <table class="ctl">
       <tr><td><kbd>W</kbd></td><td>スロットル上昇 (上昇)</td></tr>
       <tr><td><kbd>S</kbd></td><td>スロットル下降 (降下)</td></tr>
+      <tr><td><kbd>Ctrl</kbd></td><td>押している間は揚力が抜ける (Ctrl+W でも飛ばない / 空中なら落ちる)</td></tr>
       <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>ヨー (機首を左右に回す + 旋回方向へ傾く。傾きは自動で戻らないのでマウスで直す)</td></tr>
       <tr><td>マウス 前後</td><td>ピッチ (前傾で前進 / 後傾で減速・後退)</td></tr>
       <tr><td>マウス 左右</td><td>ロール (横に傾けて旋回・横移動)</td></tr>
@@ -168,6 +170,7 @@
         <small style="color:var(--muted)">計器盤の箱: 0% で透明 (メーターだけ残る)。距離・高さはマイナスも可 (前方 / 機体の下)。飛行中はマウスホイールで今の視点の距離を調整できます</small>
       </fieldset>
       <label><input type="checkbox" id="optInvert"> マウス上下反転 (input.vehicle_flipy 相当)</label>
+      <label><input type="checkbox" id="optFs"> スタート時に全画面 (Chrome / Edge では Ctrl+W でタブが閉じなくなる)</label>
       <label><input type="checkbox" id="optAssist"> 自動水平アシスト (初心者向け / Rust本家には無い)</label>
       <label><input type="checkbox" id="optSound"> ローター音を出す
         <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.25"></span></label>
@@ -213,6 +216,8 @@ $('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam3', opts
 $('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens2', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
+opts.fs = store.get('fs', true); $('optFs').checked = opts.fs;
+$('optFs').onchange = e => { opts.fs = e.target.checked; store.set('fs', opts.fs); };
 $('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
 // per-view camera offsets  (0 TPS, 1 chase, 2 cockpit, 3 overhead, 4 close, 5 cabin, 6 pilot)
 const CAM_DEF = {
@@ -587,11 +592,15 @@ const keys = {};
 addEventListener('keydown', e => {
   if (e.code === 'Escape') { if (document.body.classList.contains('hudedit')) $('hudDone').click(); else if (running) pause(); else silence(); return; }
   keys[e.code] = true;
+  if (running && (e.ctrlKey || e.metaKey)) e.preventDefault(); // block Ctrl+S / Ctrl+D etc. while flying
   if (e.code === 'KeyC' || e.code === 'KeyV') { camMode = CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]; if (running) toast('視点: ' + CAMS[camMode], 'var(--fg)', 900); }
   if (e.code === 'KeyR' && running) respawn();
   if (e.code === 'KeyH') { hudVis.all = !hudVis.all; applyHudVis(); if (running) toast('HUD ' + (hudVis.all ? 'ON' : 'OFF'), 'var(--fg)', 700); }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
+const ctrlHeld = () => !!(keys.ControlLeft || keys.ControlRight);
+// ask before leaving while flying (Ctrl+W without keyboard lock, accidental close)
+addEventListener('beforeunload', e => { if (running) { e.preventDefault(); e.returnValue = ''; } });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 let mouseDX = 0, mouseDY = 0, padAX = 0, padAY = 0;
 document.addEventListener('mousemove', e => {
@@ -606,7 +615,7 @@ canvas.addEventListener('click', () => { if (running && document.pointerLockElem
 const G = 9.81;
 const state = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(),
-  angVel: new THREE.Vector3(), throttle: 0, rotorSpin: 0, crashed: false, grounded: true
+  angVel: new THREE.Vector3(), throttle: 0, rotorSpin: 0, liftCut: 1, crashed: false, grounded: true
 };
 const CAMS = ['TPS', 'チェイス', 'コックピット', '俯瞰', '近接', '機内', 'パイロット'];
 const CAM_ORDER = [6, 5, 2, 4, 0, 1, 3]; // pilot -> cabin -> cockpit -> close -> TPS -> chase -> overhead
@@ -616,7 +625,7 @@ const spawn = { pos: new THREE.Vector3(0, HOME.top, 4), yaw: 0 };
 function respawn() {
   state.pos.copy(spawn.pos); state.vel.set(0, 0, 0); state.angVel.set(0, 0, 0);
   state.q.setFromEuler(new THREE.Euler(0, spawn.yaw, 0)); ctrl.set(0, 0, 0); bank = 0;
-  state.throttle = 0; state.crashed = false; state.grounded = true; crashTimer = 0;
+  state.throttle = 0; state.liftCut = 1; state.crashed = false; state.grounded = true; crashTimer = 0;
   heli.visible = true;
   startMode();
 }
@@ -666,6 +675,10 @@ function stepPhysics(dt) {
   const up = keys.KeyW ? 1 : 0, down = keys.KeyS ? 1 : 0;
   let target = up && !down ? 1 : down && !up ? 0 : 0.5;
   if (state.grounded && !up) target = down ? 0 : 0.0;
+  // Rust: holding Ctrl kills lift (Ctrl+W does not take off, in the air it drops)
+  const cut = ctrlHeld();
+  if (cut) target = 0;
+  state.liftCut += ((cut ? 0.15 : 1) - state.liftCut) * Math.min(1, dt * (cut ? 3 : 1.5));
   state.throttle += (target - state.throttle) * Math.min(1, dt * 0.7); // collective lags like a heavy rotor
   state.rotorSpin += ((state.grounded && state.throttle < 0.05 ? 0.25 : 1) - state.rotorSpin) * Math.min(1, dt * 0.6); // engine spool-up
 
@@ -715,8 +728,8 @@ function stepPhysics(dt) {
   // --- forces ---
   // thrust relative to hover: 0 -> 0.55g, 0.5 -> ~0.95g (slow sink), 1 -> 1.75g
   // heavy airframe: little excess power (max ~1.4g), neutral = slow sink
-  const thrustG = state.throttle < 0.5 ? 0.6 + state.throttle * 0.7 : 0.95 + (state.throttle - 0.5) * 0.9;
-  let thrust = thrustG * G * state.rotorSpin;
+  const thrustG = state.throttle < 0.5 ? 0.6 + state.throttle * 0.7 : 0.95 + (state.throttle - 0.5) * 0.6; // max ~1.25g: gentler climb
+  let thrust = thrustG * G * state.rotorSpin * state.liftCut;
   // altitude ceiling: lift fades out over the last 15 m, then gets pushed back down
   if (opts.ceil > 0) {
     const over = state.pos.y - (opts.ceil - 15);
@@ -1075,6 +1088,7 @@ function updateHUD() {
   $('sThr').textContent = Math.round(state.throttle * 100) + '%';
   $('thrfill').style.width = (state.throttle * 100) + '%';
   for (const k of ['W', 'A', 'S', 'D']) $('k' + k).classList.toggle('on', !!keys['Key' + k]);
+  $('kCtrl').classList.toggle('on', ctrlHeld());
   drawMousePad();
   drawAttitude(a);
 }
@@ -1101,8 +1115,17 @@ $('start').onclick = () => {
   $('menu').style.display = 'none';
   running = true;
   if (lastMode !== mode) { lastMode = mode; respawn(); }
+  if (opts.fs && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().then(() => {
+      // Chromium only: lets the page receive Ctrl+W / Ctrl+T / Ctrl+N / Ctrl+R instead of the browser
+      if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(['KeyW', 'KeyT', 'KeyN', 'KeyR', 'KeyQ']).catch(() => {});
+    }).catch(() => {});
+  }
   canvas.requestPointerLock();
 };
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); if (running) pause(); }
+});
 document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => { $('start').textContent = 'クリックしてスタート'; }));
 
 respawn();
