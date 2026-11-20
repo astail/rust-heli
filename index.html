@@ -186,7 +186,8 @@
         <label><input type="checkbox" data-hud="mission"> ミッション</label>
       </div>
     </div>
-    <div style="margin-top:10px"><button type="button" class="hudbtn" id="hudEdit">HUD の位置・サイズを変更</button></div>
+    <div style="margin-top:10px"><button type="button" class="hudbtn" id="hudEdit">HUD の位置・サイズを変更</button>
+      <button type="button" class="hudbtn" id="resetAll">すべての設定を初期化</button></div>
     <p class="note">Facepunch Studios とは無関係のファンメイド練習ツールです。挙動は本家を近似したもので完全一致ではありません。</p>
     <div class="startbar">
       <button id="start">クリックしてスタート</button>
@@ -204,7 +205,9 @@ const $ = id => document.getElementById(id);
 // ---------- settings ----------
 const store = {
   get(k, d) { try { const v = localStorage.getItem('rhtr_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('rhtr_' + k, JSON.stringify(v)); } catch {} }
+  set(k, v) { try { localStorage.setItem('rhtr_' + k, JSON.stringify(v)); } catch {} },
+  // wipe every setting (camera, HUD, sensitivity, sound...) but keep best times
+  resetAll() { try { Object.keys(localStorage).filter(k => k.startsWith('rhtr_') && !k.startsWith('rhtr_best_')).forEach(k => localStorage.removeItem(k)); } catch {} }
 };
 const opts = { sens: store.get('sens2', 0.5), invert: store.get('invert', false), assist: store.get('assist', false),
   ceil: store.get('ceil', 150), cam: store.get('cam3', 6) };
@@ -994,6 +997,10 @@ $('hudbar').querySelector('p').addEventListener('pointerdown', e => {
   const up = () => { e.target.removeEventListener('pointermove', mv); e.target.removeEventListener('pointerup', up); };
   e.target.addEventListener('pointermove', mv); e.target.addEventListener('pointerup', up);
 });
+$('resetAll').onclick = () => {
+  if (!confirm('感度・視点・カメラ位置・HUD の配置と表示・音・その他の設定をすべて初期状態に戻します。\n(ベストタイムは残ります)\nよろしいですか？')) return;
+  store.resetAll(); location.reload();
+};
 $('hudEdit').onclick = () => { $('menu').style.display = 'none'; document.body.classList.add('hudedit'); };
 $('hudDone').onclick = () => { document.body.classList.remove('hudedit'); $('menu').style.display = 'flex'; };
 $('hudReset').onclick = () => { hudLayout = {}; store.set('hudlayout', hudLayout); applyHudLayout(); };
