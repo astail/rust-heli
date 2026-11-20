@@ -72,7 +72,10 @@
   .cl { width: 92px; color: var(--muted); }
   .cv { width: 64px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
   .opts input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
-  #start { margin-top: 20px; width: 100%; padding: 14px; font-size: 17px; font-weight: 700; background: var(--accent); color: #fff; border: 0; border-radius: 10px; cursor: pointer; }
+  /* start button stays pinned to the bottom of the menu so it is visible without scrolling */
+  .startbar { position: sticky; bottom: -20px; margin: 16px -20px -20px; padding: 12px 20px 16px; background: rgba(22,26,33,.98); border-top: 1px solid var(--line); box-shadow: 0 -8px 16px rgba(0,0,0,.35); }
+  .startbar small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; text-align: center; }
+  #start { width: 100%; padding: 14px; font-size: 17px; font-weight: 700; background: var(--accent); color: #fff; border: 0; border-radius: 10px; cursor: pointer; }
   .note { color: var(--muted); font-size: 12px; margin-top: 12px; line-height: 1.5; }
   .best { color: var(--good); font-size: 12px; }
   @media (max-width: 640px) { #att { width: 110px; height: 110px; } #keys { display: none; } #stats { min-width: 170px; } }
@@ -172,9 +175,11 @@
       </div>
     </div>
     <div style="margin-top:10px"><button type="button" class="hudbtn" id="hudEdit">HUD の位置・サイズを変更</button></div>
-    <button id="start">クリックしてスタート</button>
-    <p class="note">PC + マウス推奨。開始するとマウスがロックされます (Esc で解除)。<br>
-    Facepunch Studios とは無関係のファンメイド練習ツールです。挙動は本家を近似したもので完全一致ではありません。</p>
+    <p class="note">Facepunch Studios とは無関係のファンメイド練習ツールです。挙動は本家を近似したもので完全一致ではありません。</p>
+    <div class="startbar">
+      <button id="start">クリックしてスタート</button>
+      <small>PC + マウス推奨。開始するとマウスがロックされます (Esc でこのメニューに戻る)</small>
+    </div>
   </div>
 </div>
 
