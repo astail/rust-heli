@@ -176,7 +176,6 @@
       </fieldset>
       <label class="chk"><input type="checkbox" id="optInvert"><span>マウス上下反転<small>Rust の input.vehicle_flipy 相当</small></span></label>
       <label class="chk"><input type="checkbox" id="optFs"><span>スタート時に全画面<small>Chrome / Edge では Ctrl+W でタブが閉じなくなる</small></span></label>
-      <label class="chk"><input type="checkbox" id="optAssist"><span>自動水平アシスト<small>初心者向け (Rust 本家には無い)</small></span></label>
       <label><input type="checkbox" id="optSound"> ローター音を出す
         <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:160px">音量 <input type="range" id="optVol" min="0" max="1" step="0.05" value="0.25"></span></label>
     </div>
@@ -214,7 +213,7 @@ const store = {
   // wipe every setting (camera, HUD, sensitivity, sound...) but keep best times
   resetAll() { try { Object.keys(localStorage).filter(k => k.startsWith('rhtr_') && !k.startsWith('rhtr_best_')).forEach(k => localStorage.removeItem(k)); } catch {} }
 };
-const opts = { sens: store.get('sens2', 0.5), invert: store.get('invert', false), assist: store.get('assist', false),
+const opts = { sens: store.get('sens2', 0.5), invert: store.get('invert', false),
   ceil: store.get('ceil', 150), cam: store.get('cam3', 6) };
 if (opts.cam === 2) opts.cam = 6; // cockpit is no longer selectable as default
 $('optSens').value = opts.sens; $('optSensV').textContent = (+opts.sens).toFixed(2);
@@ -222,13 +221,12 @@ $('optCeil').value = opts.ceil; $('optCam').value = opts.cam;
 opts.pivot = store.get('pivot', 1.0);
 $('optCeil').onchange = e => { opts.ceil = +e.target.value; store.set('ceil', opts.ceil); };
 $('optCam').onchange = e => { opts.cam = +e.target.value; store.set('cam3', opts.cam); camMode = opts.cam; camEdit = opts.cam; syncCamUI(); };
-$('optInvert').checked = opts.invert; $('optAssist').checked = opts.assist;
+$('optInvert').checked = opts.invert;
 $('optSens').oninput = e => { opts.sens = +e.target.value; $('optSensV').textContent = opts.sens.toFixed(2); store.set('sens2', opts.sens); };
 $('optInvert').onchange = e => { opts.invert = e.target.checked; store.set('invert', opts.invert); };
 opts.fs = store.get('fs', true); $('optFs').checked = opts.fs;
 const leaveFullscreen = () => { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); };
 $('optFs').onchange = e => { opts.fs = e.target.checked; store.set('fs', opts.fs); if (!opts.fs) leaveFullscreen(); };
-$('optAssist').onchange = e => { opts.assist = e.target.checked; store.set('assist', opts.assist); };
 // per-view camera offsets  (0 TPS, 1 chase, 2 cockpit, 3 overhead, 4 close, 5 cabin, 6 pilot)
 const CAM_DEF = {
   0: { dist: 8, height: 2.4, side: 0, tilt: 0 },   1: { dist: 13, height: 4.8, side: 0, tilt: 0 },
@@ -733,7 +731,6 @@ function stepPhysics(dt) {
   state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.45);
   // A/D leans the airframe into the turn (max ~20°) without levelling itself
   if (!state.grounded && yawIn) bank = THREE.MathUtils.clamp(bank + yawIn * 0.2 * dt, -0.35, 0.35);
-  if (opts.assist) bank *= Math.exp(-dt * 2);
   // light turbulence
   if (!state.grounded) {
     turbT += dt;
@@ -741,12 +738,6 @@ function stepPhysics(dt) {
     ctrl.z += Math.sin(turbT * 1.3 + 2) * Math.sin(turbT * 0.41) * dt * 0.05;
   }
 
-  // auto-level assist
-  if (opts.assist && !state.grounded) {
-    const a = attitude();
-    if (Math.abs(pitchIn) < 1e-4) ctrl.x -= (a.pitch / 57.3) * dt * 6;
-    if (Math.abs(rollIn) < 1e-4) ctrl.z += (a.roll / 57.3) * dt * 6;
-  }
 
   // apply local rotation (pitch about x, roll about z), yaw about world up
   // mouse roll against the lean straightens the lean first; only the rest rolls the real attitude
@@ -800,23 +791,36 @@ function stepPhysics(dt) {
       crash('ローターが接触'); return;
     }
   }
-  if (state.pos.y <= gnd.h) {
+  // while taxiing, stay glued to the ground going downhill instead of hopping off every bump
+  const glue = state.grounded && ctrlHeld() && state.pos.y - gnd.h < 0.6 && state.vel.y < 1;
+  if (state.pos.y <= gnd.h || glue) {
     const impact = -state.vel.y, hs = hv.length();
     if (!state.grounded && (impact > 7 || hs > 12 || tiltUp < 0.8)) { crash(impact > 7 ? '強く接地しすぎ' : tiltUp < 0.8 ? '傾いたまま接地' : '速度超過で接地'); return; }
     state.pos.y = gnd.h;
     if (state.vel.y < 0) state.vel.y = 0;
     // Ctrl+W / Ctrl+S on the ground: taxi forward / slowly backward without lifting off
     const taxi = ctrlHeld() ? (keys.KeyW ? 1 : 0) - (keys.KeyS ? 0.4 : 0) : 0;
+    // ground slope along the heading / to the right (sampled 1 m each way)
+    const fw = new THREE.Vector3(0, 0, -1).applyQuaternion(state.q); fw.y = 0; fw.normalize();
+    const rt = new THREE.Vector3(-fw.z, 0, fw.x);
+    const hAt = (dx, dz) => groundAt(state.pos.x + dx, state.pos.z + dz, 1.0).h;
+    const slopeF = Math.atan((hAt(fw.x, fw.z) - hAt(-fw.x, -fw.z)) / 2);   // + = uphill ahead
+    const slopeR = Math.atan((hAt(rt.x, rt.z) - hAt(-rt.x, -rt.z)) / 2);   // + = right side higher
     if (taxi) {
-      const f = _v.set(0, 0, -1).applyQuaternion(state.q); f.y = 0; f.normalize();
-      const k = Math.min(1, dt * 1.2), tv = 6 * taxi; // ~22 km/h
+      const f = fw;
+      // climbing gets slower the steeper it is; ~28° and up cannot be climbed
+      const up = slopeF * Math.sign(taxi) * 57.3;
+      const climb = up > 0 ? Math.max(0, 1 - Math.pow(up / 28, 1.5)) : 1;
+      const k = Math.min(1, dt * 1.2), tv = 6 * taxi * climb; // ~22 km/h on flat ground
       state.vel.x += (f.x * tv - state.vel.x) * k; state.vel.z += (f.z * tv - state.vel.z) * k;
     } else { state.vel.x *= Math.exp(-dt * 4); state.vel.z *= Math.exp(-dt * 4); }
     if (!state.grounded) onTouchdown(gnd, impact, hs);
     state.grounded = true;
-    // settle level on ground
+    // sit on the ground following its slope (nose up uphill, rolled with a side slope)
     _e.setFromQuaternion(state.q, 'YXZ');
-    _e.x *= Math.exp(-dt * 8); _e.z *= Math.exp(-dt * 8);
+    const tiltLim = 0.45, ks = 1 - Math.exp(-dt * 8);
+    _e.x += (THREE.MathUtils.clamp(slopeF, -tiltLim, tiltLim) - _e.x) * ks;
+    _e.z += (THREE.MathUtils.clamp(slopeR, -tiltLim, tiltLim) - _e.z) * ks;
     state.q.setFromEuler(_e);
     state.angVel.x = state.angVel.z = 0; ctrl.x = ctrl.z = 0; bank = 0;
   } else if (state.pos.y > gnd.h + 0.15) {
