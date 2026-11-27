@@ -709,7 +709,7 @@ function stepPhysics(dt) {
   const cut = ctrlHeld();
   if (cut) target = 0;
   state.liftCut += ((cut ? 0.15 : 1) - state.liftCut) * Math.min(1, dt * (cut ? 3 : 1.5));
-  state.throttle += (target - state.throttle) * Math.min(1, dt * 0.7); // collective lags like a heavy rotor
+  state.throttle += (target - state.throttle) * Math.min(1, dt * 0.47); // collective lags like a heavy rotor
   state.rotorSpin += ((state.grounded && state.throttle < 0.05 && !cut ? 0.25 : 1) - state.rotorSpin) * Math.min(1, dt * 0.6); // engine spool-up
 
   // --- angular input ---
@@ -721,21 +721,22 @@ function stepPhysics(dt) {
   const yawIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
 
   // mouse feeds a control rate; the airframe's rotational inertia follows it with lag
-  if (!state.grounded) { ctrl.x += pitchIn * 3; ctrl.z += rollIn * 3; }
-  ctrl.x = THREE.MathUtils.clamp(ctrl.x, -0.6, 0.6); ctrl.z = THREE.MathUtils.clamp(ctrl.z, -0.6, 0.6);
-  const cd = Math.exp(-dt * 1.25); ctrl.x *= cd; ctrl.z *= cd;
-  const inertia = Math.min(1, dt * 0.75); // heavy airframe: slow to start and to stop rotating
+  // (gain / decay stays 2.4, so one mouse flick turns the same total angle, just more slowly)
+  if (!state.grounded) { ctrl.x += pitchIn * 2; ctrl.z += rollIn * 2; }
+  ctrl.x = THREE.MathUtils.clamp(ctrl.x, -0.4, 0.4); ctrl.z = THREE.MathUtils.clamp(ctrl.z, -0.4, 0.4);
+  const cd = Math.exp(-dt * 0.83); ctrl.x *= cd; ctrl.z *= cd;
+  const inertia = Math.min(1, dt * 0.5); // heavy airframe: slow to start and to stop rotating
   state.angVel.x += (ctrl.x - state.angVel.x) * inertia;
   state.angVel.z += (ctrl.z - state.angVel.z) * inertia;
   const yawTarget = yawIn * 0.6 * (state.grounded && !ctrlHeld() ? 0.0 : 1); // Ctrl on the ground: steer while taxiing
-  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.45);
+  state.angVel.y += (yawTarget - state.angVel.y) * Math.min(1, dt * 0.3);
   // A/D leans the airframe into the turn (max ~20°) without levelling itself
   if (!state.grounded && yawIn) bank = THREE.MathUtils.clamp(bank + yawIn * 0.2 * dt, -0.35, 0.35);
-  // light turbulence
+  // light turbulence (scaled with the slower decay so it rocks the airframe no more than before)
   if (!state.grounded) {
     turbT += dt;
-    ctrl.x += Math.sin(turbT * 1.7) * Math.sin(turbT * 0.63) * dt * 0.05;
-    ctrl.z += Math.sin(turbT * 1.3 + 2) * Math.sin(turbT * 0.41) * dt * 0.05;
+    ctrl.x += Math.sin(turbT * 1.7) * Math.sin(turbT * 0.63) * dt * 0.033;
+    ctrl.z += Math.sin(turbT * 1.3 + 2) * Math.sin(turbT * 0.41) * dt * 0.033;
   }
 
 
